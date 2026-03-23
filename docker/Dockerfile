@@ -1,0 +1,62 @@
+ARG NODE_TAG=22-bookworm
+FROM node:${NODE_TAG}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+ARG SINGBOX_VERSION=1.11.4
+ARG BUILD_PROXY
+
+# System packages + uv + sing-box
+RUN set -eux; \
+    CURL="curl ${BUILD_PROXY:+-x $BUILD_PROXY}"; \
+    if [ -n "${BUILD_PROXY:-}" ]; then \
+      export http_proxy="$BUILD_PROXY" https_proxy="$BUILD_PROXY" \
+             HTTP_PROXY="$BUILD_PROXY" HTTPS_PROXY="$BUILD_PROXY" ALL_PROXY="$BUILD_PROXY"; \
+    fi; \
+    apt-get update && apt-get install -y --no-install-recommends \
+      build-essential ca-certificates curl git iproute2 \
+      locales nftables procps python3 python3-venv \
+      openssl uuid-runtime tzdata \
+    && rm -rf /var/lib/apt/lists/* \
+    && sed -i 's/^# *\(en_US\|en_GB\|ja_JP\|ko_KR\|zh_CN\|zh_TW\|de_DE\|fr_FR\)\.UTF-8/\1.UTF-8/' /etc/locale.gen \
+    && locale-gen \
+    && corepack enable \
+    && $CURL -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local sh \
+    && ln -sf /usr/local/uv /usr/local/bin/uv \
+    && ln -sf /usr/local/uvx /usr/local/bin/uvx \
+    && ARCH="$(dpkg --print-architecture)" \
+    && case "$ARCH" in amd64) SB_ARCH=amd64;; arm64) SB_ARCH=arm64;; *) echo "unsupported: $ARCH" >&2; exit 1;; esac \
+    && $CURL -fsSL "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${SB_ARCH}.tar.gz" \
+       | tar xzO "sing-box-${SINGBOX_VERSION}-linux-${SB_ARCH}/sing-box" > /usr/local/bin/sing-box \
+    && chmod +x /usr/local/bin/sing-box
+
+# Claude Code CLI
+RUN set -eux; \
+    curl ${BUILD_PROXY:+-x "$BUILD_PROXY"} -fsSL https://claude.ai/install.sh | bash; \
+    test -x /root/.local/bin/claude
+
+# cac (Claude Anti-fingerprint Cloak) — build from source
+COPY src/ /tmp/cac-src/
+COPY build.sh /tmp/cac-src/
+RUN cd /tmp/cac-src && bash build.sh \
+    && cp cac /usr/local/bin/cac \
+    && cp fingerprint-hook.js /usr/local/bin/fingerprint-hook.js \
+    && cp relay.js /usr/local/bin/relay.js \
+    && chmod +x /usr/local/bin/cac \
+    && rm -rf /tmp/cac-src
+
+ENV LANG=en_US.UTF-8 \
+    PATH="/root/.local/bin:${PATH}"
+
+RUN echo 'export PATH="/root/.local/bin:$PATH"' >> /root/.bashrc
+
+# sing-box config engine
+COPY docker/lib/ /opt/ccimage/ccimage/
+ENV PYTHONPATH="/opt/ccimage"
+
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY docker/cac-check /usr/local/bin/cac-check
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/cac-check
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["sleep", "infinity"]

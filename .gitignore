@@ -8,3 +8,6 @@ node_modules/
 # build artifacts (root-level copies from src/)
 /fingerprint-hook.js
 /relay.js
+
+# docker
+docker/.env
