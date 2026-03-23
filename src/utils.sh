@@ -22,7 +22,14 @@ _new_sid()     { uuidgen | tr '[:upper:]' '[:lower:]'; }
 _new_user_id() { python3 -c "import os; print(os.urandom(32).hex())"; }
 _new_machine_id() { uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]'; }
 _new_hostname() { echo "host-$(uuidgen | cut -d- -f1 | tr '[:upper:]' '[:lower:]')"; }
-_new_mac() { od -An -tx1 -N5 /dev/urandom | awk '{printf "02:%s:%s:%s:%s:%s",$1,$2,$3,$4,$5}'; }
+_new_mac() { printf '02:%02x:%02x:%02x:%02x:%02x' $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)); }
+
+# 获取真实命令路径（绕过 shim）
+_get_real_cmd() {
+    local cmd="$1"
+    PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "$CAC_DIR/shim-bin" | tr '\n' ':') \
+        command -v "$cmd" 2>/dev/null || true
+}
 
 # host:port:user:pass → http://user:pass@host:port
 # 或直接传入完整 URL（http://、https://、socks5://）
@@ -57,6 +64,46 @@ _proxy_reachable() {
     host=$(echo "$hp" | cut -d: -f1)
     port=$(echo "$hp" | cut -d: -f2)
     (echo >/dev/tcp/"$host"/"$port") 2>/dev/null
+}
+
+# 自动检测代理协议（当用户未指定 http/socks5/https 时）
+# 用法：_auto_detect_proxy "host:port:user:pass" → 返回可用的完整 URL
+_auto_detect_proxy() {
+    local raw="$1"
+    # 已有协议前缀，直接返回
+    if [[ "$raw" =~ ^(http|https|socks5):// ]]; then
+        echo "$raw"
+        return 0
+    fi
+
+    local host port user pass auth_part
+    host=$(echo "$raw" | cut -d: -f1)
+    port=$(echo "$raw" | cut -d: -f2)
+    user=$(echo "$raw" | cut -d: -f3)
+    pass=$(echo "$raw" | cut -d: -f4)
+    if [[ -n "$user" ]]; then
+        auth_part="${user}:${pass}@"
+    else
+        auth_part=""
+    fi
+
+    # 依次尝试 http → socks5 → https
+    local proto try_url
+    for proto in http socks5 https; do
+        try_url="${proto}://${auth_part}${host}:${port}"
+        if curl --proxy "$try_url" -fsSL --connect-timeout 8 -o /dev/null https://api.ipify.org 2>/dev/null; then
+            echo "$try_url"
+            return 0
+        fi
+    done
+
+    # 全部失败，回退 http
+    if [[ -n "$user" ]]; then
+        echo "http://${auth_part}${host}:${port}"
+    else
+        echo "http://${host}:${port}"
+    fi
+    return 1
 }
 
 _current_env()  { _read "$CAC_DIR/current"; }
