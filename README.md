@@ -1,8 +1,8 @@
 <div align="center">
 
-# :umbrella: cac
+# cac
 
-**Claude Code 小雨伞** — Isolate, protect, and manage your Claude Code.
+**Claude Code 小雨衣** — Isolate, protect, and manage your Claude Code.
 
 *Run Claude Code your way — isolated, protected, managed.*
 
