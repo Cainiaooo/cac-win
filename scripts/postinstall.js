@@ -5,25 +5,28 @@ const fs = require('fs');
 
 const cacBin = path.join(__dirname, '..', 'cac');
 
-// 确保 cac 可执行
+// Ensure cac is executable
 try {
   fs.chmodSync(cacBin, 0o755);
 } catch (e) {
-  // Windows 或权限不足时忽略
+  // Windows or insufficient permissions — ignore
+}
+
+// Auto-regenerate wrapper + runtime JS files on install/upgrade
+// This ensures bug fixes (e.g. dns-guard, wrapper crash) take effect immediately
+try {
+  execSync('"' + cacBin + '" -v', { stdio: 'ignore', timeout: 10000 });
+} catch (e) {
+  // First install or no environment yet — fine, _ensure_initialized runs on first cac command
 }
 
 console.log(`
-  ✅ claude-cac 安装成功
+  claude-cac installed successfully
 
-  首次使用：
-    cac setup                          初始化（自动配置 PATH）
-    cac add <名字> <host:port:u:p>     添加代理配置
-    cac <名字>                         切换配置
-    claude                             启动 Claude Code
+  Quick start:
+    cac env create <name> [-p <proxy>]   Create an isolated environment
+    cac <name>                           Switch environment
+    claude                               Start Claude Code
 
-  其他命令：
-    cac -v                             查看版本和安装方式
-    cac delete                         卸载 cac
-
-  更多信息：https://github.com/nmhjklnm/cac
+  Docs: https://cac.nextmind.space/docs
 `);
