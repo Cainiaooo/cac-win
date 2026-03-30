@@ -292,12 +292,10 @@ if [[ -n "$PROXY" ]]; then
 fi
 
 # ── git identity spoofing ──
-# Prevent git email leakage (Claude runs `git config --get user.email` on startup)
+# Intercept `git config --get user.email` at process level (telemetry read only)
+# Do NOT set GIT_AUTHOR_EMAIL/GIT_COMMITTER_EMAIL — those would affect real git commits
 if [[ -f "$_env_dir/git_email" ]]; then
-    _git_email=$(tr -d '[:space:]' < "$_env_dir/git_email")
-    export GIT_AUTHOR_EMAIL="$_git_email"
-    export GIT_COMMITTER_EMAIL="$_git_email"
-    export CAC_GIT_EMAIL="$_git_email"
+    export CAC_GIT_EMAIL=$(tr -d '[:space:]' < "$_env_dir/git_email")
 fi
 
 # ── repository fingerprint (rh) spoofing ──
