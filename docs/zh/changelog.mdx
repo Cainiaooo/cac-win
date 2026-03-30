@@ -5,6 +5,36 @@ description: 版本发布历史和重要变更
 
 所有重要变更记录在此，每个条目关联对应的 PR 或 Issue。
 
+## v1.5.0
+<sub>2026-03-29</sub>
+
+**基于 v2.1.86 逆向分析的防封增强** — [Issue #47](https://github.com/nmhjklnm/cac/issues/47)
+
+基于 [@mo-xiaoxi](https://github.com/mo-xiaoxi) 对 Claude Code v2.1.86（679,353 行去混淆 JS）的完整静态分析：
+
+- **仓库指纹 (rh) 伪装** [P0]：Claude 计算 `rh = SHA256(git_remote_url).hex.slice(0,16)` 随每个事件发送——即使换账号换设备，同一仓库的操作仍可被关联。通过 `child_process.execSync/exec` 猴子补丁拦截，返回每环境唯一的伪造远程 URL。
+- **Git 邮箱伪装** [P1]：Claude 启动时执行 `git config --get user.email`，直接暴露真实开发者身份。Wrapper 现在设置 `GIT_AUTHOR_EMAIL` + `GIT_COMMITTER_EMAIL` + 进程级 `CAC_GIT_EMAIL` 拦截。
+- **遥测策略重设计** [P1]：零遥测本身是风控信号——"无 1p_event 但有 API 调用"强关联反检测工具用户。新三档模型：
+  - `stealth`（新默认）：仅设 `DISABLE_TELEMETRY=1`——屏蔽 1p_event 但 GrowthBook/Statsig/Feature flags 正常工作。行为与正常用户无异；所有上报的指纹都是假的。
+  - `paranoid`（原 `aggressive`）：12 层全量遥测封杀——最大隐私，但可能被检测。
+  - `transparent`（原 `off`）：不干预——指纹覆盖完善后使用。
+  - 向后兼容：旧名称自动映射。升级时自动迁移已有环境。
+- **环境人设预设** [P1]：`--persona macos-vscode|macos-cursor|macos-iterm|linux-desktop` 注入终端环境变量（`TERM_PROGRAM`、`__CFBundleIdentifier`、`CURSOR_TRACE_ID` 等）并隐藏 Docker 信号（`/.dockerenv`、`/proc/1/cgroup`）。Docker/服务器环境现在看起来像桌面开发者。
+- **Trusted Device Token 预防** [P1]：`tengu_sessions_elevated_auth_enforcement` gate 当前关闭但机制已完备（token 存 macOS Keychain）。每环境 `CLAUDE_TRUSTED_DEVICE_TOKEN` 预防性覆盖。`cac env check` 检测 Keychain 残留。
+- **Billing header 禁用** [P2]：`CLAUDE_CODE_ATTRIBUTION_HEADER=0` 抑制 `x-anthropic-billing-header`。
+- **Datadog 域名拦截** [P2]：`http-intake.logs.us5.datadoghq.com` 加入 DNS 拦截列表。
+- **metadata.user_id 一致性检查** [P2]：`cac env check` 验证 `.claude.json` 的 `userID` 与环境文件一致——检测 Claude Code 是否在启动时覆写了伪造的 ID。
+
+**新命令**
+
+- `cac env create <name> --persona <preset>` — 带终端人设创建环境
+- `cac env set <name> telemetry <stealth|paranoid|transparent>` — 切换遥测模式
+- `cac env set <name> persona <preset|--remove>` — 设置或移除人设
+
+**迁移**
+
+- 已有环境在 `npm upgrade` 时自动迁移：生成新文件（`fake_git_remote`、`git_email`、`device_token`），更新遥测模式名称。
+
 ## v1.4.4
 <sub>2026-03-29</sub>
 

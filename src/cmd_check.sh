@@ -51,57 +51,111 @@ cmd_check() {
     local wrapper_file="$CAC_DIR/bin/claude"
     local wrapper_content=""
     [[ -f "$wrapper_file" ]] && wrapper_content=$(<"$wrapper_file")
-    local telemetry_mode; telemetry_mode=$(_read "$env_dir/telemetry_mode" "conservative")
-    local _tel_conservative_vars=("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA")
-    local _tel_aggressive_vars=(
+    local telemetry_mode; telemetry_mode=$(_read "$env_dir/telemetry_mode" "stealth")
+    # Normalize old names
+    case "$telemetry_mode" in conservative) telemetry_mode="stealth" ;; aggressive) telemetry_mode="paranoid" ;; off) telemetry_mode="transparent" ;; esac
+    local _tel_stealth_vars=("DISABLE_TELEMETRY" "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA")
+    local _tel_paranoid_vars=(
         "CLAUDE_CODE_ENABLE_TELEMETRY" "DO_NOT_TRACK"
         "OTEL_SDK_DISABLED" "OTEL_TRACES_EXPORTER" "OTEL_METRICS_EXPORTER" "OTEL_LOGS_EXPORTER"
         "SENTRY_DSN" "DISABLE_ERROR_REPORTING" "DISABLE_BUG_COMMAND"
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "TELEMETRY_DISABLED" "DISABLE_TELEMETRY"
         "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"
     )
-    if [[ "$telemetry_mode" == "off" ]]; then
-        echo "    $(_dim "○") telemetry  off (no protection)"
-    elif [[ "$telemetry_mode" == "aggressive" ]]; then
-        local env_ok=0 env_total=${#_tel_aggressive_vars[@]}
-        for var in "${_tel_aggressive_vars[@]}"; do
+    if [[ "$telemetry_mode" == "transparent" ]]; then
+        echo "    $(_dim "○") telemetry  transparent (no protection)"
+    elif [[ "$telemetry_mode" == "paranoid" ]]; then
+        local env_ok=0 env_total=${#_tel_paranoid_vars[@]}
+        for var in "${_tel_paranoid_vars[@]}"; do
             [[ "$wrapper_content" == *"$var"* ]] && (( env_ok++ )) || true
         done
         if [[ "$env_ok" -eq "$env_total" ]]; then
-            echo "    $(_green "✓") telemetry  aggressive ${env_ok}/${env_total} blocked"
+            echo "    $(_green "✓") telemetry  paranoid ${env_ok}/${env_total} blocked"
         else
-            echo "    $(_red "✗") telemetry  aggressive ${env_ok}/${env_total} blocked"
+            echo "    $(_red "✗") telemetry  paranoid ${env_ok}/${env_total} blocked"
             problems+=("telemetry shield ${env_ok}/${env_total}")
         fi
     else
-        local cons_ok=0
-        for var in "${_tel_conservative_vars[@]}"; do
-            [[ "$wrapper_content" == *"$var"* ]] && (( cons_ok++ )) || true
+        local stealth_ok=0
+        for var in "${_tel_stealth_vars[@]}"; do
+            [[ "$wrapper_content" == *"$var"* ]] && (( stealth_ok++ )) || true
         done
-        if [[ "$cons_ok" -eq 2 ]]; then
-            echo "    $(_green "✓") telemetry  conservative (non-essential blocked)"
+        if [[ "$stealth_ok" -eq 2 ]]; then
+            echo "    $(_green "✓") telemetry  stealth (1p blocked, features normal)"
         else
-            echo "    $(_red "✗") telemetry  conservative ($cons_ok/2)"
+            echo "    $(_red "✗") telemetry  stealth ($stealth_ok/2)"
             problems+=("telemetry shield incomplete")
         fi
     fi
 
-    # ── fingerprint hook runtime verification ──
+    # ── identity spoofing (consolidated) ──
+    local os; os=$(_detect_os)
+    local _id_ok=0 _id_total=0 _id_issues=()
+
+    # fingerprint hook
+    local _fp_ok=false
     if [[ -f "$CAC_DIR/fingerprint-hook.js" ]] && [[ -f "$env_dir/hostname" ]]; then
         local expected_hn; expected_hn=$(_read "$env_dir/hostname")
         local actual_hn
         actual_hn=$(NODE_OPTIONS="--require $CAC_DIR/fingerprint-hook.js" CAC_HOSTNAME="$expected_hn" \
             node -e "process.stdout.write(require('os').hostname())" 2>/dev/null || true)
+        (( _id_total++ )) || true
         if [[ "$actual_hn" == "$expected_hn" ]]; then
-            echo "    $(_green "✓") fingerprint spoofed ($(_dim "$expected_hn"))"
+            _fp_ok=true; (( _id_ok++ )) || true
         else
-            echo "    $(_red "✗") fingerprint NOT spoofed (got: $actual_hn)"
-            problems+=("fingerprint hook not working")
+            _id_issues+=("fingerprint hook not working")
         fi
+    fi
+    # git email
+    (( _id_total++ )) || true
+    if [[ -f "$env_dir/git_email" ]]; then
+        (( _id_ok++ )) || true
+    else
+        _id_issues+=("git email not spoofed")
+    fi
+    # repo hash
+    (( _id_total++ )) || true
+    if [[ -f "$env_dir/fake_git_remote" ]]; then
+        (( _id_ok++ )) || true
+    else
+        _id_issues+=("repo hash not spoofed")
+    fi
+    # user_id consistency
+    local _uid_ok=true
+    local _env_uid; _env_uid=$(_read "$env_dir/user_id" "")
+    if [[ -n "$_env_uid" ]]; then
+        local _config_dir="${CLAUDE_CONFIG_DIR:-$ENVS_DIR/$current/.claude}"
+        local _cj="$_config_dir/.claude.json"
+        [[ -f "$_cj" ]] || _cj="$HOME/.claude.json"
+        if [[ -f "$_cj" ]]; then
+            local _actual_uid
+            _actual_uid=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('userID',''))" "$_cj" 2>/dev/null || true)
+            (( _id_total++ )) || true
+            if [[ -n "$_actual_uid" ]] && [[ "$_actual_uid" != "$_env_uid" ]]; then
+                _uid_ok=false
+                _id_issues+=("user_id mismatch")
+            else
+                (( _id_ok++ )) || true
+            fi
+        fi
+    fi
+    # billing header
+    (( _id_total++ )) || true
+    [[ "$wrapper_content" == *"CLAUDE_CODE_ATTRIBUTION_HEADER"* ]] && { (( _id_ok++ )) || true; } || _id_issues+=("billing header exposed")
+
+    # display consolidated identity line
+    local _id_extra=""
+    [[ -f "$env_dir/persona" ]] && _id_extra=" + $(_read "$env_dir/persona")"
+    if [[ "$_id_ok" -eq "$_id_total" ]]; then
+        echo "    $(_green "✓") identity   ${_id_ok}/${_id_total} spoofed${_id_extra}"
+    else
+        echo "    $(_red "✗") identity   ${_id_ok}/${_id_total} spoofed${_id_extra}"
+        for _ii in "${_id_issues[@]}"; do
+            problems+=("$_ii")
+        done
     fi
 
     # ── IPv6 leak detection ──
-    local os; os=$(_detect_os)
     local ipv6_leak=false
     if [[ "$os" == "macos" ]]; then
         local ipv6_addrs
@@ -113,27 +167,28 @@ cmd_check() {
         [[ "$ipv6_addrs" -gt 0 ]] && ipv6_leak=true
     fi
     if [[ "$ipv6_leak" == "true" ]]; then
-        echo "    $(_yellow "⚠") IPv6      global address detected (potential leak)"
+        echo "    $(_yellow "⚠") IPv6       global address detected (potential leak)"
     else
-        echo "    $(_green "✓") IPv6      no global address"
+        echo "    $(_green "✓") IPv6       no global address"
     fi
 
-    # ── residual telemetry files ──
+    # ── warnings (only shown when relevant) ──
     if [[ -d "$HOME/.claude/telemetry" ]]; then
         local tel_files
         tel_files=$(find "$HOME/.claude/telemetry" -type f 2>/dev/null | wc -l | tr -d ' ')
         if [[ "$tel_files" -gt 0 ]]; then
-            echo "    $(_yellow "⚠") residual  $tel_files telemetry files in ~/.claude/telemetry/"
-            echo "              $(_dim "hint: rm -rf ~/.claude/telemetry/")"
+            echo "    $(_yellow "⚠") residual   $tel_files telemetry files in ~/.claude/telemetry/"
         fi
     fi
-
-    # ── concurrent sessions ──
     local _claude_count
     _claude_count=$(pgrep -x "claude" 2>/dev/null | wc -l | tr -d '[:space:]') || _claude_count=0
     local _max_sessions; _max_sessions=$(_cac_setting max_sessions 10)
     if [[ "$_claude_count" -gt "$_max_sessions" ]]; then
-        echo "    $(_yellow "⚠") sessions  $_claude_count running (threshold: $_max_sessions)"
+        echo "    $(_yellow "⚠") sessions   $_claude_count running (threshold: $_max_sessions)"
+    fi
+    if [[ "$os" == "macos" ]]; then
+        security find-generic-password -s "claude-code-credentials" >/dev/null 2>&1 && \
+            echo "    $(_yellow "⚠") keychain   Trusted Device Token residual"
     fi
 
     # ── network check (slow — streaming output) ──
@@ -233,20 +288,29 @@ cmd_check() {
 
     # ── verbose mode ──
     if [[ "$verbose" == "true" ]]; then
+        echo "  $(_bold "Identity")"
+        echo "    $([[ "$_fp_ok" == "true" ]] && _green "✓" || _red "✗") hostname    $(_read "$env_dir/hostname" "—")"
+        echo "    $([[ -f "$env_dir/git_email" ]] && _green "✓" || _yellow "⚠") git email   $(_read "$env_dir/git_email" "—")"
+        echo "    $([[ -f "$env_dir/fake_git_remote" ]] && _green "✓" || _yellow "⚠") repo hash   $(_read "$env_dir/fake_git_remote" "—")"
+        echo "    $([[ "$_uid_ok" == "true" ]] && _green "✓" || _yellow "⚠") user_id     $(_read "$env_dir/user_id" "—" | cut -c1-16)..."
+        echo "    $([[ "$wrapper_content" == *"CLAUDE_CODE_ATTRIBUTION_HEADER"* ]] && _green "✓" || _yellow "⚠") billing     $([[ "$wrapper_content" == *"CLAUDE_CODE_ATTRIBUTION_HEADER"* ]] && echo "disabled" || echo "exposed")"
+        [[ -f "$env_dir/persona" ]] && echo "    $(_green "✓") persona     $(_read "$env_dir/persona")"
+        echo
         echo "  $(_bold "Details")"
         echo "    $(_dim "UUID")       $(_read "$env_dir/uuid")"
         echo "    $(_dim "stable_id")  $(_read "$env_dir/stable_id")"
-        echo "    $(_dim "user_id")    $(_read "$env_dir/user_id" "—")"
+        echo "    $(_dim "MAC")        $(_read "$env_dir/mac_address" "—")"
+        echo "    $(_dim "machine_id") $(_read "$env_dir/machine_id" "—")"
         echo "    $(_dim "TZ")         $(_read "$env_dir/tz" "—")"
         echo "    $(_dim "LANG")       $(_read "$env_dir/lang" "—")"
         echo "    $(_dim "env")        ${env_dir/#$HOME/~}/.claude/"
         echo
         echo "  $(_bold "Telemetry") ($telemetry_mode mode)"
-        if [[ "$telemetry_mode" == "off" ]]; then
+        if [[ "$telemetry_mode" == "transparent" ]]; then
             echo "    $(_dim "  no telemetry protection active")"
         fi
-        local _vvars=("${_tel_conservative_vars[@]}")
-        [[ "$telemetry_mode" == "aggressive" ]] && _vvars=("${_tel_aggressive_vars[@]}")
+        local _vvars=("${_tel_stealth_vars[@]}")
+        [[ "$telemetry_mode" == "paranoid" ]] && _vvars=("${_tel_paranoid_vars[@]}")
         for var in "${_vvars[@]}"; do
             if [[ "$wrapper_content" == *"$var"* ]]; then
                 printf "    $(_green "✓") %s\n" "$var"

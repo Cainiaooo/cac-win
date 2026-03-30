@@ -2,7 +2,7 @@
 
 _env_cmd_create() {
     _require_setup
-    local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true
+    local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true persona=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -10,7 +10,15 @@ _env_cmd_create() {
             -c|--claude) [[ $# -ge 2 ]] || _die "$1 requires a value"; claude_ver="$2"; shift 2 ;;
             --type)      [[ $# -ge 2 ]] || _die "$1 requires a value"; env_type="$2"; shift 2 ;;
             --telemetry) [[ $# -ge 2 ]] || _die "$1 requires a value"; telemetry_mode="$2"; shift 2
-                         [[ "$telemetry_mode" =~ ^(off|conservative|aggressive)$ ]] || _die "invalid telemetry mode '$telemetry_mode' (use off, conservative, or aggressive)" ;;
+                         # Accept both old and new names
+                         case "$telemetry_mode" in
+                             conservative) telemetry_mode="stealth" ;;
+                             aggressive)   telemetry_mode="paranoid" ;;
+                             off)          telemetry_mode="transparent" ;;
+                         esac
+                         [[ "$telemetry_mode" =~ ^(stealth|paranoid|transparent)$ ]] || _die "invalid telemetry mode '$telemetry_mode' (use stealth, paranoid, or transparent)" ;;
+            --persona)   [[ $# -ge 2 ]] || _die "$1 requires a value"; persona="$2"; shift 2
+                         [[ "$persona" =~ ^(macos-vscode|macos-cursor|macos-iterm|linux-desktop)$ ]] || _die "invalid persona '$persona' (use macos-vscode, macos-cursor, macos-iterm, or linux-desktop)" ;;
             --clone)     shift; if [[ -n "${1:-}" ]] && [[ "${1:-}" != -* ]]; then clone_source="$1"; shift; else clone_source="host"; fi ;;
             --no-link)   clone_link=false; shift ;;
             -*)          _die "unknown option: $1" ;;
@@ -96,10 +104,14 @@ _env_cmd_create() {
     echo "$lang"              > "$env_dir/lang"
     [[ -n "$claude_ver" ]]    && echo "$claude_ver" > "$env_dir/version"
     echo "$env_type"          > "$env_dir/type"
+    echo "$(_new_git_remote)" > "$env_dir/fake_git_remote"
+    echo "$(_new_git_email)"  > "$env_dir/git_email"
+    echo "$(_new_device_token)" > "$env_dir/device_token"
     date -u +"%Y-%m-%dT%H:%M:%S.000Z" > "$env_dir/first_start_time"
+    [[ -n "$persona" ]] && echo "$persona" > "$env_dir/persona"
 
-    # Telemetry mode: conservative (default) or aggressive
-    [[ -z "$telemetry_mode" ]] && telemetry_mode=$(_cac_setting telemetry_mode conservative)
+    # Telemetry mode: stealth (default), paranoid, or transparent
+    [[ -z "$telemetry_mode" ]] && telemetry_mode=$(_cac_setting telemetry_mode stealth)
     echo "$telemetry_mode" > "$env_dir/telemetry_mode"
 
     mkdir -p "$env_dir/.claude"
@@ -296,15 +308,17 @@ _env_cmd_set() {
     # Parse: cac env set [name] <key> <value|--remove>
     # If first arg is a known key, use current env; otherwise treat as env name
     local name="" key="" value="" remove=false
-    local known_keys="proxy version"
+    local known_keys="proxy version telemetry persona"
 
     if [[ $# -lt 1 ]] || [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "help" ]]; then
         echo
         echo "  $(_bold "cac env set") — modify environment configuration"
         echo
-        echo "    $(_green "set") [name] proxy <url>           Set proxy"
-        echo "    $(_green "set") [name] proxy --remove        Remove proxy"
-        echo "    $(_green "set") [name] version <ver|latest>  Change Claude version"
+        echo "    $(_green "set") [name] proxy <url>                       Set proxy"
+        echo "    $(_green "set") [name] proxy --remove                  Remove proxy"
+        echo "    $(_green "set") [name] version <ver|latest>            Change Claude version"
+        echo "    $(_green "set") [name] telemetry <stealth|paranoid|transparent>"
+        echo "    $(_green "set") [name] persona <macos-vscode|macos-cursor|macos-iterm|linux-desktop|--remove>"
         echo
         echo "  $(_dim "If name is omitted, uses the current active environment.")"
         echo
@@ -362,8 +376,32 @@ _env_cmd_set() {
             echo "$ver" > "$env_dir/version"
             echo "$(_green_bold "Set") version for $(_bold "$name") → $(_cyan "$ver")"
             ;;
+        telemetry)
+            [[ "$remove" != "true" ]] || _die "cannot remove telemetry mode"
+            [[ -n "$value" ]] || _die "usage: cac env set [name] telemetry <stealth|paranoid|transparent>"
+            # Accept old names
+            case "$value" in
+                conservative) value="stealth" ;;
+                aggressive)   value="paranoid" ;;
+                off)          value="transparent" ;;
+            esac
+            [[ "$value" =~ ^(stealth|paranoid|transparent)$ ]] || _die "invalid telemetry mode '$value' (use stealth, paranoid, or transparent)"
+            echo "$value" > "$env_dir/telemetry_mode"
+            echo "$(_green_bold "Set") telemetry for $(_bold "$name") → $(_cyan "$value")"
+            ;;
+        persona)
+            if [[ "$remove" == "true" ]]; then
+                rm -f "$env_dir/persona"
+                echo "$(_green_bold "Removed") persona from $(_bold "$name")"
+            else
+                [[ -n "$value" ]] || _die "usage: cac env set [name] persona <macos-vscode|macos-cursor|macos-iterm|linux-desktop>"
+                [[ "$value" =~ ^(macos-vscode|macos-cursor|macos-iterm|linux-desktop)$ ]] || _die "invalid persona '$value'"
+                echo "$value" > "$env_dir/persona"
+                echo "$(_green_bold "Set") persona for $(_bold "$name") → $(_cyan "$value")"
+            fi
+            ;;
         *)
-            _die "unknown key '$key' — use proxy or version"
+            _die "unknown key '$key' — use proxy, version, telemetry, or persona"
             ;;
     esac
 }
@@ -381,7 +419,7 @@ cmd_env() {
             echo
             echo "  $(_bold "cac env") — environment management"
             echo
-            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--clone [source]] [--no-link] [--telemetry mode]"
+            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--clone [source]] [--no-link] [--telemetry mode] [--persona preset]"
             echo "    $(_green "set") [name] proxy <url>           Set proxy"
             echo "    $(_green "set") [name] proxy --remove        Remove proxy"
             echo "    $(_green "set") [name] version <ver|latest>  Change Claude version"
