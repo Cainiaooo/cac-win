@@ -110,10 +110,10 @@ cac ls                                  # = cac env ls
 | `cac claude ls` | 列出已安装版本 |
 | `cac claude pin <ver>` | 当前环境绑定版本 |
 | **环境管理** | |
-| `cac env create <name> [-p proxy] [-c ver] [--clone]` | 创建环境（自动激活，`--clone` 继承配置） |
+| `cac env create <name> [-p proxy] [-c ver] [--clone] [--telemetry mode] [--persona preset]` | 创建环境（自动激活，`--telemetry transparent/stealth/paranoid` 控制遥测，`--persona macos-vscode/...` 用于容器） |
 | `cac env ls` | 列出环境 |
 | `cac env rm <name>` | 删除环境 |
-| `cac env set [name] <key> <value>` | 修改环境（proxy / version） |
+| `cac env set [name] <key> <value>` | 修改环境（proxy / version / telemetry / persona） |
 | `cac env check [-d]` | 验证当前环境（`-d` 显示详情） |
 | `cac <name>` | 激活环境 |
 | **自管理** | |
@@ -293,10 +293,10 @@ Each environment is fully isolated:
 | `cac claude ls` | List installed versions |
 | `cac claude pin <ver>` | Pin current env to version |
 | **Environment management** | |
-| `cac env create <name> [-p proxy] [-c ver] [--clone]` | Create environment (auto-activates, `--clone` inherits config) |
+| `cac env create <name> [-p proxy] [-c ver] [--clone] [--telemetry mode] [--persona preset]` | Create environment (auto-activates, `--telemetry transparent/stealth/paranoid` for telemetry control, `--persona macos-vscode/...` for containers) |
 | `cac env ls` | List environments |
 | `cac env rm <name>` | Remove environment |
-| `cac env set [name] <key> <value>` | Modify environment (proxy / version) |
+| `cac env set [name] <key> <value>` | Modify environment (proxy / version / telemetry / persona) |
 | `cac env check [-d]` | Verify current environment (`-d` for details) |
 | `cac <name>` | Activate environment |
 | **Self-management** | |

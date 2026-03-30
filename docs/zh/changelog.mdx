@@ -19,7 +19,7 @@ description: 版本发布历史和重要变更
   - `paranoid`（原 `aggressive`）：12 层全量遥测封杀——最大隐私，但可能被检测。
   - `transparent`（原 `off`）：不干预——指纹覆盖完善后使用。
   - 向后兼容：旧名称自动映射。升级时自动迁移已有环境。
-- **环境人设预设** [P1]：`--persona macos-vscode|macos-cursor|macos-iterm|linux-desktop` 注入终端环境变量（`TERM_PROGRAM`、`__CFBundleIdentifier`、`CURSOR_TRACE_ID` 等）并隐藏 Docker 信号（`/.dockerenv`、`/proc/1/cgroup`）。Docker/服务器环境现在看起来像桌面开发者。
+- **环境人设预设** [P1]：Claude 分析终端环境（TERM_PROGRAM、CURSOR_TRACE_ID、__CFBundleIdentifier 等）和部署上下文（Docker、K8s、Codespaces）来识别开发者工作环境。`--persona macos-vscode|macos-cursor|macos-iterm|linux-desktop` 注入桌面终端环境变量并隐藏 Docker 信号（`/.dockerenv`、`/proc/1/cgroup`）— 在容器或服务器中运行时必需，避免被识别为非个人开发者环境。使用 `cac env create <name> --persona macos-vscode` 应用预设。
 - **Trusted Device Token 预防** [P1]：`tengu_sessions_elevated_auth_enforcement` gate 当前关闭但机制已完备（token 存 macOS Keychain）。每环境 `CLAUDE_TRUSTED_DEVICE_TOKEN` 预防性覆盖。`cac env check` 检测 Keychain 残留。
 - **Billing header 禁用** [P2]：`CLAUDE_CODE_ATTRIBUTION_HEADER=0` 抑制 `x-anthropic-billing-header`。
 - **Datadog 域名拦截** [P2]：`http-intake.logs.us5.datadoghq.com` 加入 DNS 拦截列表。

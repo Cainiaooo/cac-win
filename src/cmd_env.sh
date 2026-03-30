@@ -26,7 +26,7 @@ _env_cmd_create() {
         esac
     done
 
-    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>]"
+    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--telemetry <mode>] [--persona <preset>]"
     [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || _die "invalid name '$name' (use alphanumeric, dash, underscore)"
 
     local env_dir="$ENVS_DIR/$name"
@@ -318,7 +318,9 @@ _env_cmd_set() {
         echo "    $(_green "set") [name] proxy --remove                  Remove proxy"
         echo "    $(_green "set") [name] version <ver|latest>            Change Claude version"
         echo "    $(_green "set") [name] telemetry <stealth|paranoid|transparent>"
+        echo "                                                          Telemetry blocking: stealth (1p_events only), paranoid (max), transparent (none)"
         echo "    $(_green "set") [name] persona <macos-vscode|macos-cursor|macos-iterm|linux-desktop|--remove>"
+        echo "                                                          Terminal preset: inject desktop env vars, hide Docker signals (for containers)"
         echo
         echo "  $(_dim "If name is omitted, uses the current active environment.")"
         echo
@@ -419,10 +421,10 @@ cmd_env() {
             echo
             echo "  $(_bold "cac env") — environment management"
             echo
-            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--clone [source]] [--no-link] [--telemetry mode] [--persona preset]"
-            echo "    $(_green "set") [name] proxy <url>           Set proxy"
-            echo "    $(_green "set") [name] proxy --remove        Remove proxy"
-            echo "    $(_green "set") [name] version <ver|latest>  Change Claude version"
+            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--telemetry mode] [--persona preset]"
+            echo "                             Create isolated environment (auto-activates)"
+            echo "    $(_green "set") [name] <key> <value>        Modify environment"
+            echo "                             proxy, version, telemetry, or persona"
             echo "    $(_green "ls")              List all environments"
             echo "    $(_green "rm") <name>       Remove an environment"
             echo "    $(_green "check")           Verify current environment"
