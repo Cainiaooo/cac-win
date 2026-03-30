@@ -51,37 +51,39 @@ cmd_check() {
     local wrapper_file="$CAC_DIR/bin/claude"
     local wrapper_content=""
     [[ -f "$wrapper_file" ]] && wrapper_content=$(<"$wrapper_file")
-    local telemetry_mode; telemetry_mode=$(_read "$env_dir/telemetry_mode" "conservative")
-    local _tel_conservative_vars=("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA")
-    local _tel_aggressive_vars=(
+    local telemetry_mode; telemetry_mode=$(_read "$env_dir/telemetry_mode" "stealth")
+    # Normalize old names
+    case "$telemetry_mode" in conservative) telemetry_mode="stealth" ;; aggressive) telemetry_mode="paranoid" ;; off) telemetry_mode="transparent" ;; esac
+    local _tel_stealth_vars=("DISABLE_TELEMETRY" "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA")
+    local _tel_paranoid_vars=(
         "CLAUDE_CODE_ENABLE_TELEMETRY" "DO_NOT_TRACK"
         "OTEL_SDK_DISABLED" "OTEL_TRACES_EXPORTER" "OTEL_METRICS_EXPORTER" "OTEL_LOGS_EXPORTER"
         "SENTRY_DSN" "DISABLE_ERROR_REPORTING" "DISABLE_BUG_COMMAND"
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "TELEMETRY_DISABLED" "DISABLE_TELEMETRY"
         "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"
     )
-    if [[ "$telemetry_mode" == "off" ]]; then
-        echo "    $(_dim "○") telemetry  off (no protection)"
-    elif [[ "$telemetry_mode" == "aggressive" ]]; then
-        local env_ok=0 env_total=${#_tel_aggressive_vars[@]}
-        for var in "${_tel_aggressive_vars[@]}"; do
+    if [[ "$telemetry_mode" == "transparent" ]]; then
+        echo "    $(_dim "○") telemetry  transparent (no protection)"
+    elif [[ "$telemetry_mode" == "paranoid" ]]; then
+        local env_ok=0 env_total=${#_tel_paranoid_vars[@]}
+        for var in "${_tel_paranoid_vars[@]}"; do
             [[ "$wrapper_content" == *"$var"* ]] && (( env_ok++ )) || true
         done
         if [[ "$env_ok" -eq "$env_total" ]]; then
-            echo "    $(_green "✓") telemetry  aggressive ${env_ok}/${env_total} blocked"
+            echo "    $(_green "✓") telemetry  paranoid ${env_ok}/${env_total} blocked"
         else
-            echo "    $(_red "✗") telemetry  aggressive ${env_ok}/${env_total} blocked"
+            echo "    $(_red "✗") telemetry  paranoid ${env_ok}/${env_total} blocked"
             problems+=("telemetry shield ${env_ok}/${env_total}")
         fi
     else
-        local cons_ok=0
-        for var in "${_tel_conservative_vars[@]}"; do
-            [[ "$wrapper_content" == *"$var"* ]] && (( cons_ok++ )) || true
+        local stealth_ok=0
+        for var in "${_tel_stealth_vars[@]}"; do
+            [[ "$wrapper_content" == *"$var"* ]] && (( stealth_ok++ )) || true
         done
-        if [[ "$cons_ok" -eq 2 ]]; then
-            echo "    $(_green "✓") telemetry  conservative (non-essential blocked)"
+        if [[ "$stealth_ok" -eq 2 ]]; then
+            echo "    $(_green "✓") telemetry  stealth (1p blocked, features normal)"
         else
-            echo "    $(_red "✗") telemetry  conservative ($cons_ok/2)"
+            echo "    $(_red "✗") telemetry  stealth ($stealth_ok/2)"
             problems+=("telemetry shield incomplete")
         fi
     fi
@@ -134,6 +136,59 @@ cmd_check() {
     local _max_sessions; _max_sessions=$(_cac_setting max_sessions 10)
     if [[ "$_claude_count" -gt "$_max_sessions" ]]; then
         echo "    $(_yellow "⚠") sessions  $_claude_count running (threshold: $_max_sessions)"
+    fi
+
+    # ── metadata.user_id consistency ──
+    local _env_uid; _env_uid=$(_read "$env_dir/user_id" "")
+    if [[ -n "$_env_uid" ]]; then
+        local _config_dir="${CLAUDE_CONFIG_DIR:-$ENVS_DIR/$current/.claude}"
+        local _cj="$_config_dir/.claude.json"
+        [[ -f "$_cj" ]] || _cj="$HOME/.claude.json"
+        if [[ -f "$_cj" ]]; then
+            local _actual_uid
+            _actual_uid=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('userID',''))" "$_cj" 2>/dev/null || true)
+            if [[ -n "$_actual_uid" ]] && [[ "$_actual_uid" != "$_env_uid" ]]; then
+                echo "    $(_yellow "⚠") user_id   mismatch — Claude may have overwritten it"
+                echo "              $(_dim "env: ${_env_uid:0:16}... json: ${_actual_uid:0:16}...")"
+                problems+=("user_id mismatch between env file and .claude.json")
+            else
+                echo "    $(_green "✓") user_id   consistent"
+            fi
+        fi
+    fi
+
+    # ── git email spoofing ──
+    if [[ -f "$env_dir/git_email" ]]; then
+        echo "    $(_green "✓") git email  spoofed ($(_dim "$(_read "$env_dir/git_email")"))"
+    else
+        echo "    $(_yellow "⚠") git email  not spoofed (real email exposed)"
+    fi
+
+    # ── repository fingerprint (rh) ──
+    if [[ -f "$env_dir/fake_git_remote" ]]; then
+        echo "    $(_green "✓") repo hash  spoofed"
+    else
+        echo "    $(_yellow "⚠") repo hash  not spoofed (rh links activity across accounts)"
+    fi
+
+    # ── billing header ──
+    if [[ "$wrapper_content" == *"CLAUDE_CODE_ATTRIBUTION_HEADER"* ]]; then
+        echo "    $(_green "✓") billing    header disabled"
+    fi
+
+    # ── Keychain residual (macOS) ──
+    if [[ "$os" == "macos" ]]; then
+        local _kc_found=false
+        security find-generic-password -s "claude-code-credentials" >/dev/null 2>&1 && _kc_found=true
+        if [[ "$_kc_found" == "true" ]]; then
+            echo "    $(_yellow "⚠") keychain   Trusted Device Token found in macOS Keychain"
+            echo "              $(_dim "hint: security delete-generic-password -s 'claude-code-credentials'")"
+        fi
+    fi
+
+    # ── persona ──
+    if [[ -f "$env_dir/persona" ]]; then
+        echo "    $(_green "✓") persona    $(_dim "$(_read "$env_dir/persona")")"
     fi
 
     # ── network check (slow — streaming output) ──
@@ -237,16 +292,19 @@ cmd_check() {
         echo "    $(_dim "UUID")       $(_read "$env_dir/uuid")"
         echo "    $(_dim "stable_id")  $(_read "$env_dir/stable_id")"
         echo "    $(_dim "user_id")    $(_read "$env_dir/user_id" "—")"
+        echo "    $(_dim "git_email")  $(_read "$env_dir/git_email" "—")"
+        echo "    $(_dim "rh_remote")  $(_read "$env_dir/fake_git_remote" "—")"
+        echo "    $(_dim "persona")    $(_read "$env_dir/persona" "—")"
         echo "    $(_dim "TZ")         $(_read "$env_dir/tz" "—")"
         echo "    $(_dim "LANG")       $(_read "$env_dir/lang" "—")"
         echo "    $(_dim "env")        ${env_dir/#$HOME/~}/.claude/"
         echo
         echo "  $(_bold "Telemetry") ($telemetry_mode mode)"
-        if [[ "$telemetry_mode" == "off" ]]; then
+        if [[ "$telemetry_mode" == "transparent" ]]; then
             echo "    $(_dim "  no telemetry protection active")"
         fi
-        local _vvars=("${_tel_conservative_vars[@]}")
-        [[ "$telemetry_mode" == "aggressive" ]] && _vvars=("${_tel_aggressive_vars[@]}")
+        local _vvars=("${_tel_stealth_vars[@]}")
+        [[ "$telemetry_mode" == "paranoid" ]] && _vvars=("${_tel_paranoid_vars[@]}")
         for var in "${_vvars[@]}"; do
             if [[ "$wrapper_content" == *"$var"* ]]; then
                 printf "    $(_green "✓") %s\n" "$var"

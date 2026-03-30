@@ -1,7 +1,7 @@
 # ── utils: colors, read/write, UUID, proxy parsing ───────────────────────
 
 # shellcheck disable=SC2034  # used in build-concatenated cac script
-CAC_VERSION="1.4.0"
+CAC_VERSION="1.5.0"
 
 _read()   { [[ -f "$1" ]] && tr -d '[:space:]' < "$1" || echo "${2:-}"; }
 _die()    { printf '%b\n' "$(_red "error:") $*" >&2; exit 1; }
@@ -51,6 +51,9 @@ _new_user_id() { python3 -c "import os; print(os.urandom(32).hex())" || _die "py
 _new_machine_id() { _gen_uuid | tr -d '-' | tr '[:upper:]' '[:lower:]'; }
 _new_hostname() { echo "host-$(_gen_uuid | cut -d- -f1 | tr '[:upper:]' '[:lower:]')"; }
 _new_mac() { printf '02:%02x:%02x:%02x:%02x:%02x' $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)); }
+_new_git_remote() { echo "https://github.com/user-$(_gen_uuid | cut -d- -f1)/project-$(_gen_uuid | cut -d- -f2).git"; }
+_new_git_email() { echo "user-$(_gen_uuid | cut -d- -f1 | tr '[:upper:]' '[:lower:]')@users.noreply.github.com"; }
+_new_device_token() { python3 -c "import os; print(os.urandom(32).hex())" || _die "python3 required"; }
 
 # Get real command path (bypass shim)
 _get_real_cmd() {

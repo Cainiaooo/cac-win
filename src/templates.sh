@@ -238,41 +238,50 @@ fi
 export PATH="$CAC_DIR/shim-bin:$PATH"
 
 # ── multi-layer telemetry protection ──
-_telemetry_mode="conservative"
+# Modes: stealth (default) | paranoid | transparent
+#   stealth:     only DISABLE_TELEMETRY=1 — 1p_events blocked, GrowthBook/Statsig/Feature flags normal
+#                looks like a normal user; all fingerprints are fake so telemetry data is useless
+#   paranoid:    full 12-layer telemetry kill — zero telemetry (detectable as "anti-telemetry user")
+#   transparent: no intervention — for when fingerprint coverage is complete
+# Backward compat: conservative→stealth, aggressive→paranoid, off→transparent
+_telemetry_mode="stealth"
 [[ -f "$_env_dir/telemetry_mode" ]] && _telemetry_mode=$(tr -d '[:space:]' < "$_env_dir/telemetry_mode")
+case "$_telemetry_mode" in
+    conservative) _telemetry_mode="stealth" ;;
+    aggressive)   _telemetry_mode="paranoid" ;;
+    off)          _telemetry_mode="transparent" ;;
+esac
+if [[ "$_telemetry_mode" != "stealth" ]] && [[ "$_telemetry_mode" != "paranoid" ]] && [[ "$_telemetry_mode" != "transparent" ]]; then
+    echo "[cac] warning: unknown telemetry mode '$_telemetry_mode', using stealth" >&2
+    _telemetry_mode="stealth"
+fi
 
-# off: no telemetry intervention at all
-# conservative: disable non-essential traffic only (looks like corporate bandwidth saving)
-# aggressive: full 12-layer telemetry kill (maximum privacy, potentially detectable)
-if [[ "$_telemetry_mode" != "off" ]]; then
-    export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+if [[ "$_telemetry_mode" == "stealth" ]]; then
+    # Block 1p_event reporting only; GrowthBook/Statsig/Feature flags work normally
+    # Behavior indistinguishable from normal user — feature flags, fast mode etc. all enabled
+    export DISABLE_TELEMETRY=1
     export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=
 fi
 
-if [[ "$_telemetry_mode" != "off" ]] && [[ "$_telemetry_mode" != "conservative" ]] && [[ "$_telemetry_mode" != "aggressive" ]]; then
-    echo "[cac] warning: unknown telemetry mode '$_telemetry_mode', using conservative" >&2
-    _telemetry_mode="conservative"
-fi
-
-if [[ "$_telemetry_mode" == "aggressive" ]]; then
-    # Layer 1: Claude Code native toggle
+if [[ "$_telemetry_mode" == "paranoid" ]]; then
+    # Full 12-layer telemetry kill — zero telemetry + zero auxiliary requests
+    export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+    export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=
     export CLAUDE_CODE_ENABLE_TELEMETRY=
-    # Layer 2: universal telemetry opt-out (https://consoledonottrack.com)
     export DO_NOT_TRACK=1
-    # Layer 3: OpenTelemetry SDK fully disabled
     export OTEL_SDK_DISABLED=true
     export OTEL_TRACES_EXPORTER=none
     export OTEL_METRICS_EXPORTER=none
     export OTEL_LOGS_EXPORTER=none
-    # Layer 4: empty Sentry DSN, block error reporting
     export SENTRY_DSN=
-    # Layer 5: Claude Code specific toggles
     export DISABLE_ERROR_REPORTING=1
     export DISABLE_BUG_COMMAND=1
-    # Layer 6: other known telemetry flags
     export TELEMETRY_DISABLED=1
     export DISABLE_TELEMETRY=1
 fi
+
+# ── billing header suppression (x-anthropic-billing-header) ──
+export CLAUDE_CODE_ATTRIBUTION_HEADER=0
 
 # with proxy: force OAuth (clear API config to prevent leaks)
 # without proxy: preserve user's API Key / Base URL
@@ -280,6 +289,58 @@ if [[ -n "$PROXY" ]]; then
     unset ANTHROPIC_BASE_URL
     unset ANTHROPIC_AUTH_TOKEN
     unset ANTHROPIC_API_KEY
+fi
+
+# ── git identity spoofing ──
+# Prevent git email leakage (Claude runs `git config --get user.email` on startup)
+if [[ -f "$_env_dir/git_email" ]]; then
+    _git_email=$(tr -d '[:space:]' < "$_env_dir/git_email")
+    export GIT_AUTHOR_EMAIL="$_git_email"
+    export GIT_COMMITTER_EMAIL="$_git_email"
+    export CAC_GIT_EMAIL="$_git_email"
+fi
+
+# ── repository fingerprint (rh) spoofing ──
+# Claude computes rh=SHA256(git_remote_url) per event — cross-account linkage vector
+if [[ -f "$_env_dir/fake_git_remote" ]]; then
+    export CAC_FAKE_GIT_REMOTE=$(tr -d '[:space:]' < "$_env_dir/fake_git_remote")
+fi
+
+# ── Trusted Device Token (preemptive) ──
+# tengu_sessions_elevated_auth_enforcement gate is currently off but mechanism is ready
+if [[ -f "$_env_dir/device_token" ]]; then
+    export CLAUDE_TRUSTED_DEVICE_TOKEN=$(tr -d '[:space:]' < "$_env_dir/device_token")
+fi
+
+# ── persona (Docker/server environment spoofing) ──
+if [[ -f "$_env_dir/persona" ]]; then
+    _persona=$(tr -d '[:space:]' < "$_env_dir/persona")
+    case "$_persona" in
+        macos-vscode)
+            export TERM_PROGRAM="vscode"
+            export VSCODE_GIT_ASKPASS_MAIN="/Applications/Visual Studio Code.app/Contents/Resources/app/extensions/git/dist/askpass-main.js"
+            export __CFBundleIdentifier="com.microsoft.VSCode"
+            export TERM="xterm-256color"
+            ;;
+        macos-cursor)
+            export TERM_PROGRAM="vscode"
+            export CURSOR_TRACE_ID="cursor-$(head -c 8 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+            export __CFBundleIdentifier="com.todesktop.230313mzl4w4u92"
+            export TERM="xterm-256color"
+            ;;
+        macos-iterm)
+            export TERM_PROGRAM="iTerm.app"
+            export __CFBundleIdentifier="com.googlecode.iterm2"
+            export TERM="xterm-256color"
+            export ITERM_SESSION_ID="w0t0p0:$(head -c 16 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+            ;;
+        linux-desktop)
+            export TERM_PROGRAM="vscode"
+            export TERM="xterm-256color"
+            ;;
+    esac
+    # Hide Docker signals when persona is active
+    export CAC_HIDE_DOCKER=1
 fi
 
 # ── NS-level DNS interception ──

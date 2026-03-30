@@ -97,6 +97,108 @@ if (fakeMachineId) {
   } catch (_) { /* fs/promises not available on older Node */ }
 }
 
+// --- Repository fingerprint (rh) interception ---
+// Claude Code computes rh = SHA256(normalized_git_remote_url).hex.slice(0,16)
+// and sends it with every 1p_event — cross-account linkage vector
+const fakeGitRemote = process.env.CAC_FAKE_GIT_REMOTE;
+if (fakeGitRemote) {
+  const GIT_REMOTE_PATTERNS = [
+    /git\s+remote\s+get-url/i,
+    /git\s+remote\s+-v/i,
+    /git\s+config\s+--get\s+remote\..*\.url/i,
+    /git\s+ls-remote\s+--get-url/i,
+  ];
+  function isGitRemoteCmd(cmdStr) {
+    return GIT_REMOTE_PATTERNS.some(function(p) { return p.test(cmdStr); });
+  }
+
+  const _origExecSyncFp = child_process.execSync.bind(child_process);
+  child_process.execSync = function(cmd, options) {
+    var cmdStr = typeof cmd === 'string' ? cmd : cmd.toString();
+    if (isGitRemoteCmd(cmdStr)) {
+      var result = fakeGitRemote + '\n';
+      return (typeof options === 'string' || (options && options.encoding))
+        ? result : Buffer.from(result);
+    }
+    return _origExecSyncFp(cmd, options);
+  };
+
+  const _origExecFp = child_process.exec.bind(child_process);
+  child_process.exec = function(cmd) {
+    var args = Array.prototype.slice.call(arguments);
+    var cmdStr = typeof cmd === 'string' ? cmd : cmd.toString();
+    var cb = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
+    if (isGitRemoteCmd(cmdStr)) {
+      if (cb) process.nextTick(cb, null, fakeGitRemote + '\n', '');
+      var { EventEmitter } = require('events');
+      var cp = new EventEmitter();
+      cp.stdout = new EventEmitter(); cp.stderr = new EventEmitter();
+      cp.stdin = null; cp.pid = 0; cp.kill = function() { return false; };
+      return cp;
+    }
+    return _origExecFp.apply(child_process, args);
+  };
+
+  const _origExecFileSyncFp = child_process.execFileSync.bind(child_process);
+  child_process.execFileSync = function(file, argsOrOpts, options) {
+    var fileArgs = Array.isArray(argsOrOpts) ? argsOrOpts : [];
+    var fullCmd = file + ' ' + fileArgs.join(' ');
+    if (isGitRemoteCmd(fullCmd)) {
+      var opts = Array.isArray(argsOrOpts) ? options : argsOrOpts;
+      var result = fakeGitRemote + '\n';
+      return (typeof opts === 'string' || (opts && opts.encoding))
+        ? result : Buffer.from(result);
+    }
+    return _origExecFileSyncFp(file, argsOrOpts, options);
+  };
+}
+
+// --- Git email interception ---
+// Claude Code runs `git config --get user.email` on startup (yM8 line 159222)
+// Intercept to prevent real email leakage (wrapper also sets GIT_AUTHOR_EMAIL)
+const fakeGitEmail = process.env.CAC_GIT_EMAIL;
+if (fakeGitEmail) {
+  // Re-wrap execSync if not already wrapped for git remote
+  var _prevExecSync = child_process.execSync;
+  child_process.execSync = function(cmd, options) {
+    var cmdStr = typeof cmd === 'string' ? cmd : cmd.toString();
+    if (/git\s+config\s+(--global\s+|--get\s+)*user\.email/i.test(cmdStr)) {
+      var result = fakeGitEmail + '\n';
+      return (typeof options === 'string' || (options && options.encoding))
+        ? result : Buffer.from(result);
+    }
+    return _prevExecSync(cmd, options);
+  };
+}
+
+// --- Docker/container environment detection bypass ---
+// Claude Code checks /.dockerenv and /proc/1/cgroup to detect Docker
+// In Docker mode with persona, we hide container signals
+if (process.env.CAC_HIDE_DOCKER === '1') {
+  const _origExistsSync = fs.existsSync.bind(fs);
+  fs.existsSync = function(p) {
+    var ps = typeof p === 'string' ? p : (p && p.toString ? p.toString() : '');
+    if (ps === '/.dockerenv') return false;
+    return _origExistsSync(p);
+  };
+
+  // Intercept /proc/1/cgroup reads to remove docker references
+  if (fakeMachineId || true) {
+    var _prevReadFileSync = fs.readFileSync;
+    fs.readFileSync = function(path, options) {
+      var ps = typeof path === 'string' ? path : (path && path.toString ? path.toString() : '');
+      if (ps === '/proc/1/cgroup') {
+        var content;
+        try { content = _prevReadFileSync(path, options); } catch(e) { throw e; }
+        var str = typeof content === 'string' ? content : content.toString();
+        str = str.replace(/docker|containerd|kubepods/gi, 'system.slice');
+        return (typeof options === 'string' || (options && options.encoding)) ? str : Buffer.from(str);
+      }
+      return _prevReadFileSync(path, options);
+    };
+  }
+}
+
 // --- Windows: intercept child_process for wmic / reg queries ---
 function makeFakeChildProcess() {
   const { EventEmitter } = require('events');

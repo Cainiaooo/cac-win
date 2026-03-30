@@ -19,6 +19,7 @@ var BLOCKED_DOMAINS = new Set([
     'sentry.io',
     'o1137031.ingest.sentry.io',
     'cdn.growthbook.io',
+    'http-intake.logs.us5.datadoghq.com',
 ]);
 
 /**

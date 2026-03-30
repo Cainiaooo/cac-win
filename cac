@@ -11,7 +11,7 @@ VERSIONS_DIR="$CAC_DIR/versions"
 # ── utils: colors, read/write, UUID, proxy parsing ───────────────────────
 
 # shellcheck disable=SC2034  # used in build-concatenated cac script
-CAC_VERSION="1.4.0"
+CAC_VERSION="1.5.0"
 
 _read()   { [[ -f "$1" ]] && tr -d '[:space:]' < "$1" || echo "${2:-}"; }
 _die()    { printf '%b\n' "$(_red "error:") $*" >&2; exit 1; }
@@ -61,6 +61,9 @@ _new_user_id() { python3 -c "import os; print(os.urandom(32).hex())" || _die "py
 _new_machine_id() { _gen_uuid | tr -d '-' | tr '[:upper:]' '[:lower:]'; }
 _new_hostname() { echo "host-$(_gen_uuid | cut -d- -f1 | tr '[:upper:]' '[:lower:]')"; }
 _new_mac() { printf '02:%02x:%02x:%02x:%02x:%02x' $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)); }
+_new_git_remote() { echo "https://github.com/user-$(_gen_uuid | cut -d- -f1)/project-$(_gen_uuid | cut -d- -f2).git"; }
+_new_git_email() { echo "user-$(_gen_uuid | cut -d- -f1 | tr '[:upper:]' '[:lower:]')@users.noreply.github.com"; }
+_new_device_token() { python3 -c "import os; print(os.urandom(32).hex())" || _die "python3 required"; }
 
 # Get real command path (bypass shim)
 _get_real_cmd() {
@@ -436,6 +439,7 @@ TELEMETRY_DOMAINS=(
     "sentry.io"
     "o1137031.ingest.sentry.io"
     "cdn.growthbook.io"
+    "http-intake.logs.us5.datadoghq.com"
 )
 
 # write HOSTALIASES file (fallback layer: gethostbyname-level blocking)
@@ -476,6 +480,7 @@ var BLOCKED_DOMAINS = new Set([
     'sentry.io',
     'o1137031.ingest.sentry.io',
     'cdn.growthbook.io',
+    'http-intake.logs.us5.datadoghq.com',
 ]);
 
 /**
@@ -1173,41 +1178,50 @@ fi
 export PATH="$CAC_DIR/shim-bin:$PATH"
 
 # ── multi-layer telemetry protection ──
-_telemetry_mode="conservative"
+# Modes: stealth (default) | paranoid | transparent
+#   stealth:     only DISABLE_TELEMETRY=1 — 1p_events blocked, GrowthBook/Statsig/Feature flags normal
+#                looks like a normal user; all fingerprints are fake so telemetry data is useless
+#   paranoid:    full 12-layer telemetry kill — zero telemetry (detectable as "anti-telemetry user")
+#   transparent: no intervention — for when fingerprint coverage is complete
+# Backward compat: conservative→stealth, aggressive→paranoid, off→transparent
+_telemetry_mode="stealth"
 [[ -f "$_env_dir/telemetry_mode" ]] && _telemetry_mode=$(tr -d '[:space:]' < "$_env_dir/telemetry_mode")
+case "$_telemetry_mode" in
+    conservative) _telemetry_mode="stealth" ;;
+    aggressive)   _telemetry_mode="paranoid" ;;
+    off)          _telemetry_mode="transparent" ;;
+esac
+if [[ "$_telemetry_mode" != "stealth" ]] && [[ "$_telemetry_mode" != "paranoid" ]] && [[ "$_telemetry_mode" != "transparent" ]]; then
+    echo "[cac] warning: unknown telemetry mode '$_telemetry_mode', using stealth" >&2
+    _telemetry_mode="stealth"
+fi
 
-# off: no telemetry intervention at all
-# conservative: disable non-essential traffic only (looks like corporate bandwidth saving)
-# aggressive: full 12-layer telemetry kill (maximum privacy, potentially detectable)
-if [[ "$_telemetry_mode" != "off" ]]; then
-    export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+if [[ "$_telemetry_mode" == "stealth" ]]; then
+    # Block 1p_event reporting only; GrowthBook/Statsig/Feature flags work normally
+    # Behavior indistinguishable from normal user — feature flags, fast mode etc. all enabled
+    export DISABLE_TELEMETRY=1
     export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=
 fi
 
-if [[ "$_telemetry_mode" != "off" ]] && [[ "$_telemetry_mode" != "conservative" ]] && [[ "$_telemetry_mode" != "aggressive" ]]; then
-    echo "[cac] warning: unknown telemetry mode '$_telemetry_mode', using conservative" >&2
-    _telemetry_mode="conservative"
-fi
-
-if [[ "$_telemetry_mode" == "aggressive" ]]; then
-    # Layer 1: Claude Code native toggle
+if [[ "$_telemetry_mode" == "paranoid" ]]; then
+    # Full 12-layer telemetry kill — zero telemetry + zero auxiliary requests
+    export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+    export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=
     export CLAUDE_CODE_ENABLE_TELEMETRY=
-    # Layer 2: universal telemetry opt-out (https://consoledonottrack.com)
     export DO_NOT_TRACK=1
-    # Layer 3: OpenTelemetry SDK fully disabled
     export OTEL_SDK_DISABLED=true
     export OTEL_TRACES_EXPORTER=none
     export OTEL_METRICS_EXPORTER=none
     export OTEL_LOGS_EXPORTER=none
-    # Layer 4: empty Sentry DSN, block error reporting
     export SENTRY_DSN=
-    # Layer 5: Claude Code specific toggles
     export DISABLE_ERROR_REPORTING=1
     export DISABLE_BUG_COMMAND=1
-    # Layer 6: other known telemetry flags
     export TELEMETRY_DISABLED=1
     export DISABLE_TELEMETRY=1
 fi
+
+# ── billing header suppression (x-anthropic-billing-header) ──
+export CLAUDE_CODE_ATTRIBUTION_HEADER=0
 
 # with proxy: force OAuth (clear API config to prevent leaks)
 # without proxy: preserve user's API Key / Base URL
@@ -1215,6 +1229,58 @@ if [[ -n "$PROXY" ]]; then
     unset ANTHROPIC_BASE_URL
     unset ANTHROPIC_AUTH_TOKEN
     unset ANTHROPIC_API_KEY
+fi
+
+# ── git identity spoofing ──
+# Prevent git email leakage (Claude runs `git config --get user.email` on startup)
+if [[ -f "$_env_dir/git_email" ]]; then
+    _git_email=$(tr -d '[:space:]' < "$_env_dir/git_email")
+    export GIT_AUTHOR_EMAIL="$_git_email"
+    export GIT_COMMITTER_EMAIL="$_git_email"
+    export CAC_GIT_EMAIL="$_git_email"
+fi
+
+# ── repository fingerprint (rh) spoofing ──
+# Claude computes rh=SHA256(git_remote_url) per event — cross-account linkage vector
+if [[ -f "$_env_dir/fake_git_remote" ]]; then
+    export CAC_FAKE_GIT_REMOTE=$(tr -d '[:space:]' < "$_env_dir/fake_git_remote")
+fi
+
+# ── Trusted Device Token (preemptive) ──
+# tengu_sessions_elevated_auth_enforcement gate is currently off but mechanism is ready
+if [[ -f "$_env_dir/device_token" ]]; then
+    export CLAUDE_TRUSTED_DEVICE_TOKEN=$(tr -d '[:space:]' < "$_env_dir/device_token")
+fi
+
+# ── persona (Docker/server environment spoofing) ──
+if [[ -f "$_env_dir/persona" ]]; then
+    _persona=$(tr -d '[:space:]' < "$_env_dir/persona")
+    case "$_persona" in
+        macos-vscode)
+            export TERM_PROGRAM="vscode"
+            export VSCODE_GIT_ASKPASS_MAIN="/Applications/Visual Studio Code.app/Contents/Resources/app/extensions/git/dist/askpass-main.js"
+            export __CFBundleIdentifier="com.microsoft.VSCode"
+            export TERM="xterm-256color"
+            ;;
+        macos-cursor)
+            export TERM_PROGRAM="vscode"
+            export CURSOR_TRACE_ID="cursor-$(head -c 8 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+            export __CFBundleIdentifier="com.todesktop.230313mzl4w4u92"
+            export TERM="xterm-256color"
+            ;;
+        macos-iterm)
+            export TERM_PROGRAM="iTerm.app"
+            export __CFBundleIdentifier="com.googlecode.iterm2"
+            export TERM="xterm-256color"
+            export ITERM_SESSION_ID="w0t0p0:$(head -c 16 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+            ;;
+        linux-desktop)
+            export TERM_PROGRAM="vscode"
+            export TERM="xterm-256color"
+            ;;
+    esac
+    # Hide Docker signals when persona is active
+    export CAC_HIDE_DOCKER=1
 fi
 
 # ── NS-level DNS interception ──
@@ -1542,7 +1608,7 @@ _ensure_initialized() {
 
 _env_cmd_create() {
     _require_setup
-    local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true
+    local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true persona=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -1550,7 +1616,15 @@ _env_cmd_create() {
             -c|--claude) [[ $# -ge 2 ]] || _die "$1 requires a value"; claude_ver="$2"; shift 2 ;;
             --type)      [[ $# -ge 2 ]] || _die "$1 requires a value"; env_type="$2"; shift 2 ;;
             --telemetry) [[ $# -ge 2 ]] || _die "$1 requires a value"; telemetry_mode="$2"; shift 2
-                         [[ "$telemetry_mode" =~ ^(off|conservative|aggressive)$ ]] || _die "invalid telemetry mode '$telemetry_mode' (use off, conservative, or aggressive)" ;;
+                         # Accept both old and new names
+                         case "$telemetry_mode" in
+                             conservative) telemetry_mode="stealth" ;;
+                             aggressive)   telemetry_mode="paranoid" ;;
+                             off)          telemetry_mode="transparent" ;;
+                         esac
+                         [[ "$telemetry_mode" =~ ^(stealth|paranoid|transparent)$ ]] || _die "invalid telemetry mode '$telemetry_mode' (use stealth, paranoid, or transparent)" ;;
+            --persona)   [[ $# -ge 2 ]] || _die "$1 requires a value"; persona="$2"; shift 2
+                         [[ "$persona" =~ ^(macos-vscode|macos-cursor|macos-iterm|linux-desktop)$ ]] || _die "invalid persona '$persona' (use macos-vscode, macos-cursor, macos-iterm, or linux-desktop)" ;;
             --clone)     shift; if [[ -n "${1:-}" ]] && [[ "${1:-}" != -* ]]; then clone_source="$1"; shift; else clone_source="host"; fi ;;
             --no-link)   clone_link=false; shift ;;
             -*)          _die "unknown option: $1" ;;
@@ -1636,10 +1710,14 @@ _env_cmd_create() {
     echo "$lang"              > "$env_dir/lang"
     [[ -n "$claude_ver" ]]    && echo "$claude_ver" > "$env_dir/version"
     echo "$env_type"          > "$env_dir/type"
+    echo "$(_new_git_remote)" > "$env_dir/fake_git_remote"
+    echo "$(_new_git_email)"  > "$env_dir/git_email"
+    echo "$(_new_device_token)" > "$env_dir/device_token"
     date -u +"%Y-%m-%dT%H:%M:%S.000Z" > "$env_dir/first_start_time"
+    [[ -n "$persona" ]] && echo "$persona" > "$env_dir/persona"
 
-    # Telemetry mode: conservative (default) or aggressive
-    [[ -z "$telemetry_mode" ]] && telemetry_mode=$(_cac_setting telemetry_mode conservative)
+    # Telemetry mode: stealth (default), paranoid, or transparent
+    [[ -z "$telemetry_mode" ]] && telemetry_mode=$(_cac_setting telemetry_mode stealth)
     echo "$telemetry_mode" > "$env_dir/telemetry_mode"
 
     mkdir -p "$env_dir/.claude"
@@ -1836,15 +1914,17 @@ _env_cmd_set() {
     # Parse: cac env set [name] <key> <value|--remove>
     # If first arg is a known key, use current env; otherwise treat as env name
     local name="" key="" value="" remove=false
-    local known_keys="proxy version"
+    local known_keys="proxy version telemetry persona"
 
     if [[ $# -lt 1 ]] || [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "help" ]]; then
         echo
         echo "  $(_bold "cac env set") — modify environment configuration"
         echo
-        echo "    $(_green "set") [name] proxy <url>           Set proxy"
-        echo "    $(_green "set") [name] proxy --remove        Remove proxy"
-        echo "    $(_green "set") [name] version <ver|latest>  Change Claude version"
+        echo "    $(_green "set") [name] proxy <url>                       Set proxy"
+        echo "    $(_green "set") [name] proxy --remove                  Remove proxy"
+        echo "    $(_green "set") [name] version <ver|latest>            Change Claude version"
+        echo "    $(_green "set") [name] telemetry <stealth|paranoid|transparent>"
+        echo "    $(_green "set") [name] persona <macos-vscode|macos-cursor|macos-iterm|linux-desktop|--remove>"
         echo
         echo "  $(_dim "If name is omitted, uses the current active environment.")"
         echo
@@ -1902,8 +1982,32 @@ _env_cmd_set() {
             echo "$ver" > "$env_dir/version"
             echo "$(_green_bold "Set") version for $(_bold "$name") → $(_cyan "$ver")"
             ;;
+        telemetry)
+            [[ "$remove" != "true" ]] || _die "cannot remove telemetry mode"
+            [[ -n "$value" ]] || _die "usage: cac env set [name] telemetry <stealth|paranoid|transparent>"
+            # Accept old names
+            case "$value" in
+                conservative) value="stealth" ;;
+                aggressive)   value="paranoid" ;;
+                off)          value="transparent" ;;
+            esac
+            [[ "$value" =~ ^(stealth|paranoid|transparent)$ ]] || _die "invalid telemetry mode '$value' (use stealth, paranoid, or transparent)"
+            echo "$value" > "$env_dir/telemetry_mode"
+            echo "$(_green_bold "Set") telemetry for $(_bold "$name") → $(_cyan "$value")"
+            ;;
+        persona)
+            if [[ "$remove" == "true" ]]; then
+                rm -f "$env_dir/persona"
+                echo "$(_green_bold "Removed") persona from $(_bold "$name")"
+            else
+                [[ -n "$value" ]] || _die "usage: cac env set [name] persona <macos-vscode|macos-cursor|macos-iterm|linux-desktop>"
+                [[ "$value" =~ ^(macos-vscode|macos-cursor|macos-iterm|linux-desktop)$ ]] || _die "invalid persona '$value'"
+                echo "$value" > "$env_dir/persona"
+                echo "$(_green_bold "Set") persona for $(_bold "$name") → $(_cyan "$value")"
+            fi
+            ;;
         *)
-            _die "unknown key '$key' — use proxy or version"
+            _die "unknown key '$key' — use proxy, version, telemetry, or persona"
             ;;
     esac
 }
@@ -1921,7 +2025,7 @@ cmd_env() {
             echo
             echo "  $(_bold "cac env") — environment management"
             echo
-            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--clone [source]] [--no-link] [--telemetry mode]"
+            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--clone [source]] [--no-link] [--telemetry mode] [--persona preset]"
             echo "    $(_green "set") [name] proxy <url>           Set proxy"
             echo "    $(_green "set") [name] proxy --remove        Remove proxy"
             echo "    $(_green "set") [name] version <ver|latest>  Change Claude version"
@@ -2210,37 +2314,39 @@ cmd_check() {
     local wrapper_file="$CAC_DIR/bin/claude"
     local wrapper_content=""
     [[ -f "$wrapper_file" ]] && wrapper_content=$(<"$wrapper_file")
-    local telemetry_mode; telemetry_mode=$(_read "$env_dir/telemetry_mode" "conservative")
-    local _tel_conservative_vars=("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA")
-    local _tel_aggressive_vars=(
+    local telemetry_mode; telemetry_mode=$(_read "$env_dir/telemetry_mode" "stealth")
+    # Normalize old names
+    case "$telemetry_mode" in conservative) telemetry_mode="stealth" ;; aggressive) telemetry_mode="paranoid" ;; off) telemetry_mode="transparent" ;; esac
+    local _tel_stealth_vars=("DISABLE_TELEMETRY" "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA")
+    local _tel_paranoid_vars=(
         "CLAUDE_CODE_ENABLE_TELEMETRY" "DO_NOT_TRACK"
         "OTEL_SDK_DISABLED" "OTEL_TRACES_EXPORTER" "OTEL_METRICS_EXPORTER" "OTEL_LOGS_EXPORTER"
         "SENTRY_DSN" "DISABLE_ERROR_REPORTING" "DISABLE_BUG_COMMAND"
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "TELEMETRY_DISABLED" "DISABLE_TELEMETRY"
         "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"
     )
-    if [[ "$telemetry_mode" == "off" ]]; then
-        echo "    $(_dim "○") telemetry  off (no protection)"
-    elif [[ "$telemetry_mode" == "aggressive" ]]; then
-        local env_ok=0 env_total=${#_tel_aggressive_vars[@]}
-        for var in "${_tel_aggressive_vars[@]}"; do
+    if [[ "$telemetry_mode" == "transparent" ]]; then
+        echo "    $(_dim "○") telemetry  transparent (no protection)"
+    elif [[ "$telemetry_mode" == "paranoid" ]]; then
+        local env_ok=0 env_total=${#_tel_paranoid_vars[@]}
+        for var in "${_tel_paranoid_vars[@]}"; do
             [[ "$wrapper_content" == *"$var"* ]] && (( env_ok++ )) || true
         done
         if [[ "$env_ok" -eq "$env_total" ]]; then
-            echo "    $(_green "✓") telemetry  aggressive ${env_ok}/${env_total} blocked"
+            echo "    $(_green "✓") telemetry  paranoid ${env_ok}/${env_total} blocked"
         else
-            echo "    $(_red "✗") telemetry  aggressive ${env_ok}/${env_total} blocked"
+            echo "    $(_red "✗") telemetry  paranoid ${env_ok}/${env_total} blocked"
             problems+=("telemetry shield ${env_ok}/${env_total}")
         fi
     else
-        local cons_ok=0
-        for var in "${_tel_conservative_vars[@]}"; do
-            [[ "$wrapper_content" == *"$var"* ]] && (( cons_ok++ )) || true
+        local stealth_ok=0
+        for var in "${_tel_stealth_vars[@]}"; do
+            [[ "$wrapper_content" == *"$var"* ]] && (( stealth_ok++ )) || true
         done
-        if [[ "$cons_ok" -eq 2 ]]; then
-            echo "    $(_green "✓") telemetry  conservative (non-essential blocked)"
+        if [[ "$stealth_ok" -eq 2 ]]; then
+            echo "    $(_green "✓") telemetry  stealth (1p blocked, features normal)"
         else
-            echo "    $(_red "✗") telemetry  conservative ($cons_ok/2)"
+            echo "    $(_red "✗") telemetry  stealth ($stealth_ok/2)"
             problems+=("telemetry shield incomplete")
         fi
     fi
@@ -2293,6 +2399,59 @@ cmd_check() {
     local _max_sessions; _max_sessions=$(_cac_setting max_sessions 10)
     if [[ "$_claude_count" -gt "$_max_sessions" ]]; then
         echo "    $(_yellow "⚠") sessions  $_claude_count running (threshold: $_max_sessions)"
+    fi
+
+    # ── metadata.user_id consistency ──
+    local _env_uid; _env_uid=$(_read "$env_dir/user_id" "")
+    if [[ -n "$_env_uid" ]]; then
+        local _config_dir="${CLAUDE_CONFIG_DIR:-$ENVS_DIR/$current/.claude}"
+        local _cj="$_config_dir/.claude.json"
+        [[ -f "$_cj" ]] || _cj="$HOME/.claude.json"
+        if [[ -f "$_cj" ]]; then
+            local _actual_uid
+            _actual_uid=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('userID',''))" "$_cj" 2>/dev/null || true)
+            if [[ -n "$_actual_uid" ]] && [[ "$_actual_uid" != "$_env_uid" ]]; then
+                echo "    $(_yellow "⚠") user_id   mismatch — Claude may have overwritten it"
+                echo "              $(_dim "env: ${_env_uid:0:16}... json: ${_actual_uid:0:16}...")"
+                problems+=("user_id mismatch between env file and .claude.json")
+            else
+                echo "    $(_green "✓") user_id   consistent"
+            fi
+        fi
+    fi
+
+    # ── git email spoofing ──
+    if [[ -f "$env_dir/git_email" ]]; then
+        echo "    $(_green "✓") git email  spoofed ($(_dim "$(_read "$env_dir/git_email")"))"
+    else
+        echo "    $(_yellow "⚠") git email  not spoofed (real email exposed)"
+    fi
+
+    # ── repository fingerprint (rh) ──
+    if [[ -f "$env_dir/fake_git_remote" ]]; then
+        echo "    $(_green "✓") repo hash  spoofed"
+    else
+        echo "    $(_yellow "⚠") repo hash  not spoofed (rh links activity across accounts)"
+    fi
+
+    # ── billing header ──
+    if [[ "$wrapper_content" == *"CLAUDE_CODE_ATTRIBUTION_HEADER"* ]]; then
+        echo "    $(_green "✓") billing    header disabled"
+    fi
+
+    # ── Keychain residual (macOS) ──
+    if [[ "$os" == "macos" ]]; then
+        local _kc_found=false
+        security find-generic-password -s "claude-code-credentials" >/dev/null 2>&1 && _kc_found=true
+        if [[ "$_kc_found" == "true" ]]; then
+            echo "    $(_yellow "⚠") keychain   Trusted Device Token found in macOS Keychain"
+            echo "              $(_dim "hint: security delete-generic-password -s 'claude-code-credentials'")"
+        fi
+    fi
+
+    # ── persona ──
+    if [[ -f "$env_dir/persona" ]]; then
+        echo "    $(_green "✓") persona    $(_dim "$(_read "$env_dir/persona")")"
     fi
 
     # ── network check (slow — streaming output) ──
@@ -2396,16 +2555,19 @@ cmd_check() {
         echo "    $(_dim "UUID")       $(_read "$env_dir/uuid")"
         echo "    $(_dim "stable_id")  $(_read "$env_dir/stable_id")"
         echo "    $(_dim "user_id")    $(_read "$env_dir/user_id" "—")"
+        echo "    $(_dim "git_email")  $(_read "$env_dir/git_email" "—")"
+        echo "    $(_dim "rh_remote")  $(_read "$env_dir/fake_git_remote" "—")"
+        echo "    $(_dim "persona")    $(_read "$env_dir/persona" "—")"
         echo "    $(_dim "TZ")         $(_read "$env_dir/tz" "—")"
         echo "    $(_dim "LANG")       $(_read "$env_dir/lang" "—")"
         echo "    $(_dim "env")        ${env_dir/#$HOME/~}/.claude/"
         echo
         echo "  $(_bold "Telemetry") ($telemetry_mode mode)"
-        if [[ "$telemetry_mode" == "off" ]]; then
+        if [[ "$telemetry_mode" == "transparent" ]]; then
             echo "    $(_dim "  no telemetry protection active")"
         fi
-        local _vvars=("${_tel_conservative_vars[@]}")
-        [[ "$telemetry_mode" == "aggressive" ]] && _vvars=("${_tel_aggressive_vars[@]}")
+        local _vvars=("${_tel_stealth_vars[@]}")
+        [[ "$telemetry_mode" == "paranoid" ]] && _vvars=("${_tel_paranoid_vars[@]}")
         for var in "${_vvars[@]}"; do
             if [[ "$wrapper_content" == *"$var"* ]]; then
                 printf "    $(_green "✓") %s\n" "$var"
