@@ -57,6 +57,15 @@ _relay_stop() {
     fi
     rm -f "$CAC_DIR/relay.port" "$CAC_DIR/relay.proxy"
 
+    # stop watchdog (relay.proxy already removed above, watchdog will self-exit within 5s;
+    # kill it immediately for clean teardown)
+    local wd_file="$CAC_DIR/relay.watchdog.pid"
+    if [[ -f "$wd_file" ]]; then
+        local wd_pid; wd_pid=$(tr -d '[:space:]' < "$wd_file")
+        [[ -n "$wd_pid" ]] && kill "$wd_pid" 2>/dev/null || true
+        rm -f "$wd_file"
+    fi
+
     # cleanup route
     _relay_remove_route 2>/dev/null || true
 }

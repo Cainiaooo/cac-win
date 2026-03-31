@@ -449,6 +449,40 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
         echo "$_rport" > "$_relay_port_file"
     fi
 
+    # env-level watchdog singleton: auto-restarts relay if it crashes
+    # - one watchdog per environment, shared across all sessions
+    # - exits automatically when relay is intentionally stopped (relay.proxy removed)
+    _relay_watchdog_file="$CAC_DIR/relay.watchdog.pid"
+    _wd_running=false
+    if [[ -f "$_relay_watchdog_file" ]]; then
+        _wpid=$(tr -d '[:space:]' < "$_relay_watchdog_file")
+        [[ -n "$_wpid" ]] && kill -0 "$_wpid" 2>/dev/null && _wd_running=true
+    fi
+    if [[ "$_wd_running" != "true" ]]; then
+        (
+            trap 'rm -f "$CAC_DIR/relay.watchdog.pid"' EXIT
+            set +e
+            while true; do
+                sleep 5
+                # relay.proxy removed by _relay_stop — intentional stop, exit watchdog
+                [[ -f "$CAC_DIR/relay.proxy" ]] || exit 0
+                # relay alive — nothing to do
+                if [[ -f "$CAC_DIR/relay.pid" ]]; then
+                    _rpid=$(tr -d '[:space:]' < "$CAC_DIR/relay.pid")
+                    kill -0 "$_rpid" 2>/dev/null && continue
+                fi
+                # relay dead — restart on same port with same proxy
+                _rport=$(tr -d '[:space:]' < "$CAC_DIR/relay.port" 2>/dev/null || true)
+                _rproxy=$(tr -d '[:space:]' < "$CAC_DIR/relay.proxy" 2>/dev/null || true)
+                [[ -n "$_rport" ]] && [[ -n "$_rproxy" ]] || exit 0
+                node "$CAC_DIR/relay.js" "$_rport" "$_rproxy" "$CAC_DIR/relay.pid" </dev/null >>"$CAC_DIR/relay.log" 2>&1 &
+            done
+        ) &
+        _new_wpid=$!
+        echo "$_new_wpid" > "$_relay_watchdog_file"
+        disown "$_new_wpid"
+    fi
+
     # override proxy to point to local relay
     if [[ -f "$_relay_port_file" ]]; then
         _rport=$(tr -d '[:space:]' < "$_relay_port_file")
