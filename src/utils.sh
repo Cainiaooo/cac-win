@@ -13,9 +13,9 @@ _cac_setting() {
     local settings="$CAC_DIR/settings.json"
     [[ -f "$settings" ]] || { echo "$default"; return; }
     local val
-    val=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get(sys.argv[2],''))" "$settings" "$key" 2>/dev/null || true)
+    val=$(node -e "const d=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));process.stdout.write(d[process.argv[2]]||'')" "$settings" "$key" 2>/dev/null || true)
     val="${val:-$default}"
-    # Sync hot-path keys as plain files (avoids python3 spawn in wrapper)
+    # Sync hot-path keys as plain files (avoids node spawn in wrapper)
     [[ "$key" == "max_sessions" ]] && echo "$val" > "$CAC_DIR/max_sessions"
     echo "$val"
 }
@@ -42,11 +42,11 @@ _gen_uuid() {
     elif [[ -f /proc/sys/kernel/random/uuid ]]; then
         cat /proc/sys/kernel/random/uuid
     else
-        python3 -c "import uuid; print(uuid.uuid4())" || _die "python3 required for UUID generation (install python3 or uuidgen)"
+        node -e "process.stdout.write(require('crypto').randomUUID())" || _die "node required for UUID generation"
     fi
 }
 _new_uuid()    { _gen_uuid | tr '[:lower:]' '[:upper:]'; }
-_new_user_id() { python3 -c "import os; print(os.urandom(32).hex())" || _die "python3 required"; }
+_new_user_id() { node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" || _die "node required"; }
 _new_machine_id() { _gen_uuid | tr -d '-' | tr '[:upper:]' '[:lower:]'; }
 _new_hostname() {
     local -a _first_names=(
@@ -418,22 +418,17 @@ _update_claude_json_user_id() {
         fst=$(tr -d '[:space:]' < "$ENVS_DIR/$current_env/first_start_time")
     fi
 
-    python3 - "$claude_json" "$user_id" "$fst" << 'PYEOF'
-import json, sys, uuid
-fpath, uid, fst = sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else ""
-with open(fpath) as f:
-    d = json.load(f)
-d['userID'] = uid
-d['anonymousId'] = 'claudecode.v1.' + str(uuid.uuid4())
-d.pop('numStartups', None)
-if fst:
-    d['firstStartTime'] = fst
-else:
-    d.pop('firstStartTime', None)
-d.pop('cachedGrowthBookFeatures', None)
-d.pop('cachedStatsigGates', None)
-with open(fpath, 'w') as f:
-    json.dump(d, f, indent=2, ensure_ascii=False)
-PYEOF
+    node -e "
+const fs=require('fs'),p=require('path');
+const fpath=process.argv[1],uid=process.argv[2],fst=process.argv[3]||'';
+let d=JSON.parse(fs.readFileSync(fpath,'utf8'));
+d.userID=uid;
+d.anonymousId='claudecode.v1.'+require('crypto').randomUUID();
+delete d.numStartups;
+if(fst){d.firstStartTime=fst;}else{delete d.firstStartTime;}
+delete d.cachedGrowthBookFeatures;
+delete d.cachedStatsigGates;
+fs.writeFileSync(fpath,JSON.stringify(d,null,2));
+" "$claude_json" "$user_id" "$fst"
     [[ $? -eq 0 ]] || echo "warning: failed to update claude.json userID" >&2
 }
