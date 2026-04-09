@@ -388,7 +388,7 @@ fi
 _real=""
 if [[ -f "$_env_dir/version" ]]; then
     _ver=$(tr -d '[:space:]' < "$_env_dir/version")
-    _ver_bin="$CAC_DIR/versions/$_ver/claude"
+    _ver_bin=$(_version_binary "$_ver")
     [[ -x "$_ver_bin" ]] && _real="$_ver_bin"
 fi
 if [[ -z "$_real" ]] || [[ ! -x "$_real" ]]; then
