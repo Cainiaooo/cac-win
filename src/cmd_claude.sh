@@ -2,6 +2,20 @@
 
 _GCS_BUCKET="https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"
 
+_manifest_checksum() {
+    local platform="$1"
+    node -e "
+let json = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => { json += chunk; });
+process.stdin.on('end', () => {
+  const d = JSON.parse(json);
+  const entry = ((d.platforms || {})[process.argv[1]]) || {};
+  process.stdout.write(entry.checksum || '');
+});
+" "$platform"
+}
+
 _download_version() {
     local ver="$1"
     local platform; platform=$(_detect_platform) || _die "unsupported platform"
@@ -26,10 +40,7 @@ _download_version() {
     echo "done"
 
     local checksum=""
-    checksum=$(echo "$manifest" | node -e "
-const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-process.stdout.write((d.platforms||{})[process.argv[1]]||'').checksum||'')
-" "$platform" 2>/dev/null || true)
+    checksum=$(printf '%s' "$manifest" | _manifest_checksum "$platform" 2>/dev/null || true)
 
     if [[ -z "$checksum" ]] || [[ ! "$checksum" =~ ^[a-f0-9]{64}$ ]]; then
         rm -rf "$dest_dir"

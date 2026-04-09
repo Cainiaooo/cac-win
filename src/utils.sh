@@ -33,6 +33,7 @@ _yellow() { printf '\033[33m%s\033[0m' "$*"; }
 _cyan()   { printf '\033[36m%s\033[0m' "$*"; }
 _dim()    { printf '\033[2m%s\033[0m' "$*"; }
 _green_bold() { printf '\033[1;32m%s\033[0m' "$*"; }
+_log()    { printf '\033[32m✓\033[0m %b\n' "$*"; }
 
 _detect_os() {
     case "$(uname -s)" in
@@ -40,6 +41,18 @@ _detect_os() {
         Linux)  echo "linux" ;;
         MINGW*|MSYS*|CYGWIN*) echo "windows" ;;
         *) echo "unknown" ;;
+    esac
+}
+
+_native_path() {
+    local path="$1"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            cygpath -w "$path" 2>/dev/null || printf '%s' "$path"
+            ;;
+        *)
+            printf '%s' "$path"
+            ;;
     esac
 }
 

@@ -43,6 +43,7 @@ _yellow() { printf '\033[33m%s\033[0m' "$*"; }
 _cyan()   { printf '\033[36m%s\033[0m' "$*"; }
 _dim()    { printf '\033[2m%s\033[0m' "$*"; }
 _green_bold() { printf '\033[1;32m%s\033[0m' "$*"; }
+_log()    { printf '\033[32m✓\033[0m %b\n' "$*"; }
 
 _detect_os() {
     case "$(uname -s)" in
@@ -50,6 +51,18 @@ _detect_os() {
         Linux)  echo "linux" ;;
         MINGW*|MSYS*|CYGWIN*) echo "windows" ;;
         *) echo "unknown" ;;
+    esac
+}
+
+_native_path() {
+    local path="$1"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            cygpath -w "$path" 2>/dev/null || printf '%s' "$path"
+            ;;
+        *)
+            printf '%s' "$path"
+            ;;
     esac
 }
 
@@ -1362,13 +1375,14 @@ fi
 # Use -r (readable) not -f (exists) — root-owned files with mode 600 exist but
 # can't be read by normal user, causing bun/node to crash silently.
 if [[ -r "$CAC_DIR/cac-dns-guard.js" ]]; then
+    _dns_guard_path=$(_native_path "$CAC_DIR/cac-dns-guard.js")
     case "${NODE_OPTIONS:-}" in
         *cac-dns-guard.js*) ;; # already injected, skip
-        *) export NODE_OPTIONS="${NODE_OPTIONS:-} --require $CAC_DIR/cac-dns-guard.js" ;;
+        *) export NODE_OPTIONS="${NODE_OPTIONS:-} --require $_dns_guard_path" ;;
     esac
     case "${BUN_OPTIONS:-}" in
         *cac-dns-guard.js*) ;;
-        *) export BUN_OPTIONS="${BUN_OPTIONS:-} --preload $CAC_DIR/cac-dns-guard.js" ;;
+        *) export BUN_OPTIONS="${BUN_OPTIONS:-} --preload $_dns_guard_path" ;;
     esac
 fi
 # fallback layer: HOSTALIASES (gethostbyname level)
@@ -1376,17 +1390,18 @@ fi
 
 # ── mTLS client certificate ──
 if [[ -f "$_env_dir/client_cert.pem" ]] && [[ -f "$_env_dir/client_key.pem" ]]; then
-    export CAC_MTLS_CERT="$_env_dir/client_cert.pem"
-    export CAC_MTLS_KEY="$_env_dir/client_key.pem"
+    export CAC_MTLS_CERT="$(_native_path "$_env_dir/client_cert.pem")"
+    export CAC_MTLS_KEY="$(_native_path "$_env_dir/client_key.pem")"
     [[ -f "$CAC_DIR/ca/ca_cert.pem" ]] && {
-        export CAC_MTLS_CA="$CAC_DIR/ca/ca_cert.pem"
-        export NODE_EXTRA_CA_CERTS="$CAC_DIR/ca/ca_cert.pem"
+        _ca_cert_path=$(_native_path "$CAC_DIR/ca/ca_cert.pem")
+        export CAC_MTLS_CA="$_ca_cert_path"
+        export NODE_EXTRA_CA_CERTS="$_ca_cert_path"
     }
     [[ -n "${_hp:-}" ]] && export CAC_PROXY_HOST="$_hp"
 fi
 
 # ensure CA cert is always trusted (required for mTLS)
-[[ -f "$CAC_DIR/ca/ca_cert.pem" ]] && export NODE_EXTRA_CA_CERTS="$CAC_DIR/ca/ca_cert.pem"
+[[ -f "$CAC_DIR/ca/ca_cert.pem" ]] && export NODE_EXTRA_CA_CERTS="$(_native_path "$CAC_DIR/ca/ca_cert.pem")"
 
 [[ -f "$_env_dir/tz" ]]   && export TZ=$(tr -d '[:space:]' < "$_env_dir/tz")
 [[ -f "$_env_dir/lang" ]] && export LANG=$(tr -d '[:space:]' < "$_env_dir/lang")
@@ -1401,13 +1416,14 @@ fi
 export CAC_USERNAME="user-$(echo "$_name" | cut -c1-8)"
 export USER="$CAC_USERNAME" LOGNAME="$CAC_USERNAME"
 if [[ -r "$CAC_DIR/fingerprint-hook.js" ]]; then
+    _fingerprint_hook_path=$(_native_path "$CAC_DIR/fingerprint-hook.js")
     case "${NODE_OPTIONS:-}" in
         *fingerprint-hook.js*) ;;
-        *) export NODE_OPTIONS="--require $CAC_DIR/fingerprint-hook.js ${NODE_OPTIONS:-}" ;;
+        *) export NODE_OPTIONS="--require $_fingerprint_hook_path ${NODE_OPTIONS:-}" ;;
     esac
     case "${BUN_OPTIONS:-}" in
         *fingerprint-hook.js*) ;;
-        *) export BUN_OPTIONS="--preload $CAC_DIR/fingerprint-hook.js ${BUN_OPTIONS:-}" ;;
+        *) export BUN_OPTIONS="--preload $_fingerprint_hook_path ${BUN_OPTIONS:-}" ;;
     esac
 fi
 
@@ -1754,6 +1770,11 @@ fs.writeFileSync(fpath,JSON.stringify(d,null,2)+'\n');
     # Keep .latest pointing to highest installed version
     _update_latest 2>/dev/null || true
 
+    # mTLS CA: retry on every initialization so older installs can self-heal
+    if [[ ! -f "$CAC_DIR/ca/ca_cert.pem" ]] || [[ ! -f "$CAC_DIR/ca/ca_key.pem" ]]; then
+        _generate_ca_cert 2>/dev/null || true
+    fi
+
     # Re-generate wrapper on version upgrade
     if [[ -f "$CAC_DIR/bin/claude" ]]; then
         local _wrapper_ver
@@ -1794,8 +1815,6 @@ fs.writeFileSync(fpath,JSON.stringify(d,null,2)+'\n');
         fi
     fi
 
-    # mTLS CA
-    _generate_ca_cert 2>/dev/null || true
 }
 
 # ━━━ cmd_env.sh ━━━
@@ -2066,20 +2085,28 @@ _env_cmd_activate() {
     _require_setup
     local name="$1"
     _require_env "$name"
+    local env_dir="$ENVS_DIR/$name"
 
     _timer_start
 
     echo "$name" > "$CAC_DIR/current"
     rm -f "$CAC_DIR/stopped"
 
-    if [[ -d "$ENVS_DIR/$name/.claude" ]]; then
-        export CLAUDE_CONFIG_DIR="$ENVS_DIR/$name/.claude"
+    if [[ -d "$env_dir/.claude" ]]; then
+        export CLAUDE_CONFIG_DIR="$env_dir/.claude"
     fi
 
+    # Backfill mTLS assets for environments created before Windows fixes landed.
+    if [[ ! -f "$CAC_DIR/ca/ca_cert.pem" ]] || [[ ! -f "$CAC_DIR/ca/ca_key.pem" ]]; then
+        _generate_ca_cert >/dev/null 2>&1 || true
+    fi
+    if [[ ! -f "$env_dir/client_cert.pem" ]] || [[ ! -f "$env_dir/client_key.pem" ]]; then
+        _generate_client_cert "$name" >/dev/null 2>&1 || true
+    fi
 
     # Relay lifecycle
     _relay_stop 2>/dev/null || true
-    if [[ -f "$ENVS_DIR/$name/relay" ]] && [[ "$(_read "$ENVS_DIR/$name/relay")" == "on" ]]; then
+    if [[ -f "$env_dir/relay" ]] && [[ "$(_read "$env_dir/relay")" == "on" ]]; then
         if _relay_start "$name" 2>/dev/null; then
             local rport; rport=$(_read "$CAC_DIR/relay.port")
             echo "  $(_green "+") relay: 127.0.0.1:$rport"
@@ -2096,7 +2123,7 @@ _env_cmd_set() {
     # Parse: cac env set [name] <key> <value|--remove>
     # If first arg is a known key, use current env; otherwise treat as env name
     local name="" key="" value="" remove=false
-    local known_keys="proxy version telemetry persona"
+    local known_keys="proxy version telemetry persona tz lang"
 
     if [[ $# -lt 1 ]] || [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "help" ]]; then
         echo
@@ -2109,6 +2136,8 @@ _env_cmd_set() {
         echo "                                                          Telemetry blocking: stealth (1p_events only), paranoid (max), transparent (none)"
         echo "    $(_green "set") [name] persona <macos-vscode|macos-cursor|macos-iterm|linux-desktop|--remove>"
         echo "                                                          Terminal preset: inject desktop env vars, hide Docker signals (for containers)"
+        echo "    $(_green "set") [name] tz <IANA timezone>               Set timezone (e.g. Asia/Shanghai)"
+        echo "    $(_green "set") [name] lang <locale>                    Set locale (e.g. zh_CN.UTF-8)"
         echo
         echo "  $(_dim "If name is omitted, uses the current active environment.")"
         echo
@@ -2126,7 +2155,7 @@ _env_cmd_set() {
     _require_env "$name"
     local env_dir="$ENVS_DIR/$name"
 
-    [[ $# -ge 1 ]] || _die "usage: cac env set [name] <proxy|version|bypass> <value|--remove>"
+    [[ $# -ge 1 ]] || _die "usage: cac env set [name] <proxy|version|telemetry|persona|tz|lang> <value|--remove>"
     key="$1"; shift
 
     # Parse value or --remove
@@ -2190,8 +2219,22 @@ _env_cmd_set() {
                 echo "$(_green_bold "Set") persona for $(_bold "$name") → $(_cyan "$value")"
             fi
             ;;
+        tz)
+            [[ "$remove" != "true" ]] || _die "cannot remove timezone"
+            [[ -n "$value" ]] || _die "usage: cac env set [name] tz <IANA timezone>"
+            [[ "$value" =~ ^[A-Za-z_]+/[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)?$ ]] || _die "invalid timezone '$value' (example: Asia/Shanghai)"
+            echo "$value" > "$env_dir/tz"
+            echo "$(_green_bold "Set") timezone for $(_bold "$name") → $(_cyan "$value")"
+            ;;
+        lang)
+            [[ "$remove" != "true" ]] || _die "cannot remove locale"
+            [[ -n "$value" ]] || _die "usage: cac env set [name] lang <locale>"
+            [[ "$value" =~ ^[A-Za-z]{2,3}_[A-Za-z]{2}(\.UTF-8)?$ ]] || _die "invalid locale '$value' (example: zh_CN.UTF-8)"
+            echo "$value" > "$env_dir/lang"
+            echo "$(_green_bold "Set") locale for $(_bold "$name") → $(_cyan "$value")"
+            ;;
         *)
-            _die "unknown key '$key' — use proxy, version, telemetry, or persona"
+            _die "unknown key '$key' — use proxy, version, telemetry, persona, tz, or lang"
             ;;
     esac
 }
@@ -2220,7 +2263,7 @@ cmd_env() {
             echo "    $(_green "create") <name> [-p proxy] [-c ver] [--telemetry mode] [--persona preset]"
             echo "                             Create isolated environment (auto-activates)"
             echo "    $(_green "set") [name] <key> <value>        Modify environment"
-            echo "                             proxy, version, telemetry, or persona"
+            echo "                             proxy, version, telemetry, persona, tz, or lang"
             echo "    $(_green "ls")              List all environments"
             echo "    $(_green "rm") <name>       Remove an environment"
             echo "    $(_green "check")           Verify current environment"
@@ -2576,8 +2619,9 @@ cmd_check() {
     local _fp_ok=false
     if [[ -f "$CAC_DIR/fingerprint-hook.js" ]] && [[ -f "$env_dir/hostname" ]]; then
         local expected_hn; expected_hn=$(_read "$env_dir/hostname")
+        local hook_path; hook_path=$(_native_path "$CAC_DIR/fingerprint-hook.js")
         local actual_hn
-        actual_hn=$(NODE_OPTIONS="--require $CAC_DIR/fingerprint-hook.js" CAC_HOSTNAME="$expected_hn" \
+        actual_hn=$(NODE_OPTIONS="--require $hook_path" CAC_HOSTNAME="$expected_hn" \
             node -e "process.stdout.write(require('os').hostname())" 2>/dev/null || true)
         (( _id_total++ )) || true
         if [[ "$actual_hn" == "$expected_hn" ]]; then
@@ -2853,6 +2897,20 @@ cmd_continue() {
 
 _GCS_BUCKET="https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"
 
+_manifest_checksum() {
+    local platform="$1"
+    node -e "
+let json = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => { json += chunk; });
+process.stdin.on('end', () => {
+  const d = JSON.parse(json);
+  const entry = ((d.platforms || {})[process.argv[1]]) || {};
+  process.stdout.write(entry.checksum || '');
+});
+" "$platform"
+}
+
 _download_version() {
     local ver="$1"
     local platform; platform=$(_detect_platform) || _die "unsupported platform"
@@ -2877,10 +2935,7 @@ _download_version() {
     echo "done"
 
     local checksum=""
-    checksum=$(echo "$manifest" | node -e "
-const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
-process.stdout.write((d.platforms||{})[process.argv[1]]||'').checksum||'')
-" "$platform" 2>/dev/null || true)
+    checksum=$(printf '%s' "$manifest" | _manifest_checksum "$platform" 2>/dev/null || true)
 
     if [[ -z "$checksum" ]] || [[ ! "$checksum" =~ ^[a-f0-9]{64}$ ]]; then
         rm -rf "$dest_dir"

@@ -335,13 +335,14 @@ fi
 # Use -r (readable) not -f (exists) — root-owned files with mode 600 exist but
 # can't be read by normal user, causing bun/node to crash silently.
 if [[ -r "$CAC_DIR/cac-dns-guard.js" ]]; then
+    _dns_guard_path=$(_native_path "$CAC_DIR/cac-dns-guard.js")
     case "${NODE_OPTIONS:-}" in
         *cac-dns-guard.js*) ;; # already injected, skip
-        *) export NODE_OPTIONS="${NODE_OPTIONS:-} --require $CAC_DIR/cac-dns-guard.js" ;;
+        *) export NODE_OPTIONS="${NODE_OPTIONS:-} --require $_dns_guard_path" ;;
     esac
     case "${BUN_OPTIONS:-}" in
         *cac-dns-guard.js*) ;;
-        *) export BUN_OPTIONS="${BUN_OPTIONS:-} --preload $CAC_DIR/cac-dns-guard.js" ;;
+        *) export BUN_OPTIONS="${BUN_OPTIONS:-} --preload $_dns_guard_path" ;;
     esac
 fi
 # fallback layer: HOSTALIASES (gethostbyname level)
@@ -349,17 +350,18 @@ fi
 
 # ── mTLS client certificate ──
 if [[ -f "$_env_dir/client_cert.pem" ]] && [[ -f "$_env_dir/client_key.pem" ]]; then
-    export CAC_MTLS_CERT="$_env_dir/client_cert.pem"
-    export CAC_MTLS_KEY="$_env_dir/client_key.pem"
+    export CAC_MTLS_CERT="$(_native_path "$_env_dir/client_cert.pem")"
+    export CAC_MTLS_KEY="$(_native_path "$_env_dir/client_key.pem")"
     [[ -f "$CAC_DIR/ca/ca_cert.pem" ]] && {
-        export CAC_MTLS_CA="$CAC_DIR/ca/ca_cert.pem"
-        export NODE_EXTRA_CA_CERTS="$CAC_DIR/ca/ca_cert.pem"
+        _ca_cert_path=$(_native_path "$CAC_DIR/ca/ca_cert.pem")
+        export CAC_MTLS_CA="$_ca_cert_path"
+        export NODE_EXTRA_CA_CERTS="$_ca_cert_path"
     }
     [[ -n "${_hp:-}" ]] && export CAC_PROXY_HOST="$_hp"
 fi
 
 # ensure CA cert is always trusted (required for mTLS)
-[[ -f "$CAC_DIR/ca/ca_cert.pem" ]] && export NODE_EXTRA_CA_CERTS="$CAC_DIR/ca/ca_cert.pem"
+[[ -f "$CAC_DIR/ca/ca_cert.pem" ]] && export NODE_EXTRA_CA_CERTS="$(_native_path "$CAC_DIR/ca/ca_cert.pem")"
 
 [[ -f "$_env_dir/tz" ]]   && export TZ=$(tr -d '[:space:]' < "$_env_dir/tz")
 [[ -f "$_env_dir/lang" ]] && export LANG=$(tr -d '[:space:]' < "$_env_dir/lang")
@@ -374,13 +376,14 @@ fi
 export CAC_USERNAME="user-$(echo "$_name" | cut -c1-8)"
 export USER="$CAC_USERNAME" LOGNAME="$CAC_USERNAME"
 if [[ -r "$CAC_DIR/fingerprint-hook.js" ]]; then
+    _fingerprint_hook_path=$(_native_path "$CAC_DIR/fingerprint-hook.js")
     case "${NODE_OPTIONS:-}" in
         *fingerprint-hook.js*) ;;
-        *) export NODE_OPTIONS="--require $CAC_DIR/fingerprint-hook.js ${NODE_OPTIONS:-}" ;;
+        *) export NODE_OPTIONS="--require $_fingerprint_hook_path ${NODE_OPTIONS:-}" ;;
     esac
     case "${BUN_OPTIONS:-}" in
         *fingerprint-hook.js*) ;;
-        *) export BUN_OPTIONS="--preload $CAC_DIR/fingerprint-hook.js ${BUN_OPTIONS:-}" ;;
+        *) export BUN_OPTIONS="--preload $_fingerprint_hook_path ${BUN_OPTIONS:-}" ;;
     esac
 fi
 

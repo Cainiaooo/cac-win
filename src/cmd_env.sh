@@ -265,20 +265,28 @@ _env_cmd_activate() {
     _require_setup
     local name="$1"
     _require_env "$name"
+    local env_dir="$ENVS_DIR/$name"
 
     _timer_start
 
     echo "$name" > "$CAC_DIR/current"
     rm -f "$CAC_DIR/stopped"
 
-    if [[ -d "$ENVS_DIR/$name/.claude" ]]; then
-        export CLAUDE_CONFIG_DIR="$ENVS_DIR/$name/.claude"
+    if [[ -d "$env_dir/.claude" ]]; then
+        export CLAUDE_CONFIG_DIR="$env_dir/.claude"
     fi
 
+    # Backfill mTLS assets for environments created before Windows fixes landed.
+    if [[ ! -f "$CAC_DIR/ca/ca_cert.pem" ]] || [[ ! -f "$CAC_DIR/ca/ca_key.pem" ]]; then
+        _generate_ca_cert >/dev/null 2>&1 || true
+    fi
+    if [[ ! -f "$env_dir/client_cert.pem" ]] || [[ ! -f "$env_dir/client_key.pem" ]]; then
+        _generate_client_cert "$name" >/dev/null 2>&1 || true
+    fi
 
     # Relay lifecycle
     _relay_stop 2>/dev/null || true
-    if [[ -f "$ENVS_DIR/$name/relay" ]] && [[ "$(_read "$ENVS_DIR/$name/relay")" == "on" ]]; then
+    if [[ -f "$env_dir/relay" ]] && [[ "$(_read "$env_dir/relay")" == "on" ]]; then
         if _relay_start "$name" 2>/dev/null; then
             local rport; rport=$(_read "$CAC_DIR/relay.port")
             echo "  $(_green "+") relay: 127.0.0.1:$rport"
@@ -295,7 +303,7 @@ _env_cmd_set() {
     # Parse: cac env set [name] <key> <value|--remove>
     # If first arg is a known key, use current env; otherwise treat as env name
     local name="" key="" value="" remove=false
-    local known_keys="proxy version telemetry persona"
+    local known_keys="proxy version telemetry persona tz lang"
 
     if [[ $# -lt 1 ]] || [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "help" ]]; then
         echo
@@ -308,6 +316,8 @@ _env_cmd_set() {
         echo "                                                          Telemetry blocking: stealth (1p_events only), paranoid (max), transparent (none)"
         echo "    $(_green "set") [name] persona <macos-vscode|macos-cursor|macos-iterm|linux-desktop|--remove>"
         echo "                                                          Terminal preset: inject desktop env vars, hide Docker signals (for containers)"
+        echo "    $(_green "set") [name] tz <IANA timezone>               Set timezone (e.g. Asia/Shanghai)"
+        echo "    $(_green "set") [name] lang <locale>                    Set locale (e.g. zh_CN.UTF-8)"
         echo
         echo "  $(_dim "If name is omitted, uses the current active environment.")"
         echo
@@ -325,7 +335,7 @@ _env_cmd_set() {
     _require_env "$name"
     local env_dir="$ENVS_DIR/$name"
 
-    [[ $# -ge 1 ]] || _die "usage: cac env set [name] <proxy|version|bypass> <value|--remove>"
+    [[ $# -ge 1 ]] || _die "usage: cac env set [name] <proxy|version|telemetry|persona|tz|lang> <value|--remove>"
     key="$1"; shift
 
     # Parse value or --remove
@@ -389,8 +399,22 @@ _env_cmd_set() {
                 echo "$(_green_bold "Set") persona for $(_bold "$name") → $(_cyan "$value")"
             fi
             ;;
+        tz)
+            [[ "$remove" != "true" ]] || _die "cannot remove timezone"
+            [[ -n "$value" ]] || _die "usage: cac env set [name] tz <IANA timezone>"
+            [[ "$value" =~ ^[A-Za-z_]+/[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)?$ ]] || _die "invalid timezone '$value' (example: Asia/Shanghai)"
+            echo "$value" > "$env_dir/tz"
+            echo "$(_green_bold "Set") timezone for $(_bold "$name") → $(_cyan "$value")"
+            ;;
+        lang)
+            [[ "$remove" != "true" ]] || _die "cannot remove locale"
+            [[ -n "$value" ]] || _die "usage: cac env set [name] lang <locale>"
+            [[ "$value" =~ ^[A-Za-z]{2,3}_[A-Za-z]{2}(\.UTF-8)?$ ]] || _die "invalid locale '$value' (example: zh_CN.UTF-8)"
+            echo "$value" > "$env_dir/lang"
+            echo "$(_green_bold "Set") locale for $(_bold "$name") → $(_cyan "$value")"
+            ;;
         *)
-            _die "unknown key '$key' — use proxy, version, telemetry, or persona"
+            _die "unknown key '$key' — use proxy, version, telemetry, persona, tz, or lang"
             ;;
     esac
 }
@@ -419,7 +443,7 @@ cmd_env() {
             echo "    $(_green "create") <name> [-p proxy] [-c ver] [--telemetry mode] [--persona preset]"
             echo "                             Create isolated environment (auto-activates)"
             echo "    $(_green "set") [name] <key> <value>        Modify environment"
-            echo "                             proxy, version, telemetry, or persona"
+            echo "                             proxy, version, telemetry, persona, tz, or lang"
             echo "    $(_green "ls")              List all environments"
             echo "    $(_green "rm") <name>       Remove an environment"
             echo "    $(_green "check")           Verify current environment"

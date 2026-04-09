@@ -96,8 +96,9 @@ cmd_check() {
     local _fp_ok=false
     if [[ -f "$CAC_DIR/fingerprint-hook.js" ]] && [[ -f "$env_dir/hostname" ]]; then
         local expected_hn; expected_hn=$(_read "$env_dir/hostname")
+        local hook_path; hook_path=$(_native_path "$CAC_DIR/fingerprint-hook.js")
         local actual_hn
-        actual_hn=$(NODE_OPTIONS="--require $CAC_DIR/fingerprint-hook.js" CAC_HOSTNAME="$expected_hn" \
+        actual_hn=$(NODE_OPTIONS="--require $hook_path" CAC_HOSTNAME="$expected_hn" \
             node -e "process.stdout.write(require('os').hostname())" 2>/dev/null || true)
         (( _id_total++ )) || true
         if [[ "$actual_hn" == "$expected_hn" ]]; then

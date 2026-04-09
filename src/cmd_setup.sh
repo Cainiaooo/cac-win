@@ -62,6 +62,11 @@ fs.writeFileSync(fpath,JSON.stringify(d,null,2)+'\n');
     # Keep .latest pointing to highest installed version
     _update_latest 2>/dev/null || true
 
+    # mTLS CA: retry on every initialization so older installs can self-heal
+    if [[ ! -f "$CAC_DIR/ca/ca_cert.pem" ]] || [[ ! -f "$CAC_DIR/ca/ca_key.pem" ]]; then
+        _generate_ca_cert 2>/dev/null || true
+    fi
+
     # Re-generate wrapper on version upgrade
     if [[ -f "$CAC_DIR/bin/claude" ]]; then
         local _wrapper_ver
@@ -102,6 +107,4 @@ fs.writeFileSync(fpath,JSON.stringify(d,null,2)+'\n');
         fi
     fi
 
-    # mTLS CA
-    _generate_ca_cert 2>/dev/null || true
 }

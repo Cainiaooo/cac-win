@@ -24,6 +24,7 @@ echo "════════════════════════�
 
 # source utils
 source "$PROJECT_DIR/src/utils.sh" 2>/dev/null || { echo "FATAL: cannot source utils.sh"; exit 1; }
+source "$PROJECT_DIR/src/cmd_claude.sh" 2>/dev/null || { echo "FATAL: cannot source cmd_claude.sh"; exit 1; }
 
 # ── T01: 平台检测 ──
 echo ""
@@ -165,6 +166,36 @@ echo "[T13] postinstall.js Windows 适配"
 node -c "$PROJECT_DIR/scripts/postinstall.js" 2>/dev/null && pass "语法正确" || fail "语法错误"
 grep -q 'claude.cmd' "$PROJECT_DIR/scripts/postinstall.js" && pass "claude.cmd 路径" || fail "缺 claude.cmd"
 grep -q 'win32' "$PROJECT_DIR/scripts/postinstall.js" && pass "win32 平台检查" || fail "缺 win32"
+
+# ── T13b: Windows PATH 日志函数 ──
+echo ""
+echo "[T13b] Windows PATH 日志函数"
+grep -q '^_log()' "$PROJECT_DIR/src/utils.sh" && pass "_log 已定义" || fail "_log 未定义"
+
+# ── T14: manifest 平台解析 ──
+echo ""
+echo "[T14] manifest 平台解析"
+manifest='{"platforms":{"win32-x64":{"checksum":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}}'
+checksum=$(printf '%s' "$manifest" | _manifest_checksum "win32-x64" 2>/dev/null || true)
+[[ "$checksum" == "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" ]] \
+    && pass "win32-x64 checksum 解析正确" \
+    || fail "manifest checksum 解析失败: $checksum"
+
+# ── T15: Windows 原生路径转换 ──
+echo ""
+echo "[T15] Windows 原生路径转换"
+native_path=$(_native_path "$HOME/.cac/fingerprint-hook.js")
+if is_windows; then
+    [[ "$native_path" =~ ^[A-Za-z]:\\ ]] && pass "Windows 路径已转换: $native_path" || fail "未转换为 Windows 原生路径: $native_path"
+else
+    [[ "$native_path" == "$HOME/.cac/fingerprint-hook.js" ]] && pass "非 Windows 保持原路径" || fail "非 Windows 路径异常: $native_path"
+fi
+
+# ── T16: mTLS 自愈钩子 ──
+echo ""
+echo "[T16] mTLS 自愈钩子"
+grep -q '_generate_ca_cert' "$PROJECT_DIR/src/cmd_setup.sh" && pass "初始化包含 CA 重试" || fail "初始化缺少 CA 重试"
+grep -q '_generate_client_cert "$name"' "$PROJECT_DIR/src/cmd_env.sh" && pass "激活包含 client cert 回填" || fail "激活缺少 client cert 回填"
 
 # ── 总结 ──
 echo ""
