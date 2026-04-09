@@ -211,6 +211,7 @@ _detect_platform() {
     case "$(uname -s)" in
         Darwin) os="darwin" ;;
         Linux)  os="linux" ;;
+        MINGW*|MSYS*|CYGWIN*) os="win32" ;;
         *) echo "unsupported" ; return 1 ;;
     esac
     case "$(uname -m)" in
