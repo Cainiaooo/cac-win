@@ -203,7 +203,11 @@ _resolve_version() {
 }
 
 _version_binary() {
-    echo "$VERSIONS_DIR/$1/claude"
+    local binary="claude"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) binary="claude.exe" ;;
+    esac
+    echo "$VERSIONS_DIR/$1/$binary"
 }
 
 _detect_platform() {
@@ -246,6 +250,19 @@ _sha256() {
         hash=$(node -e "const h=require('crypto').createHash('sha256');h.update(require('fs').readFileSync(process.argv[1]));process.stdout.write(h.digest('hex'))" "$file" 2>/dev/null)
     fi
     echo "$hash"
+}
+
+_count_claude_processes() {
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            # Windows: 使用 tasklist.exe
+            tasklist.exe /FI "IMAGENAME eq claude.exe" /NH 2>/dev/null \
+                | grep -ic "claude.exe" || echo 0
+            ;;
+        *)
+            pgrep -x "claude" 2>/dev/null | wc -l | tr -d '[:space:]' || echo 0
+            ;;
+    esac
 }
 
 # Ensure a Claude Code version is installed (just-in-time, like uv)
