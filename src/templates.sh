@@ -184,17 +184,12 @@ if [[ -d "$_env_dir/.claude" ]]; then
             # Skip merge if settings.json is newer than both inputs
             if [[ "$_src_settings" -nt "$_env_dir/.claude/settings.json" ]] || \
                [[ "$_env_dir/.claude/settings.override.json" -nt "$_env_dir/.claude/settings.json" ]]; then
-                python3 -c "
-import json,sys
-b=json.load(open(sys.argv[1]))
-o=json.load(open(sys.argv[2]))
-def m(b,o):
-    r=dict(b)
-    for k,v in o.items():
-        if k in r and isinstance(r[k],dict) and isinstance(v,dict): r[k]=m(r[k],v)
-        else: r[k]=v
-    return r
-json.dump(m(b,o),open(sys.argv[3],'w'),indent=2,ensure_ascii=False)
+                node -e "
+const fs=require('fs');
+const b=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));
+const o=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+function m(b,o){const r={...b};for(const[k,v]of Object.entries(o)){if(k in r&&typeof r[k]==='object'&&r[k]!==null&&typeof v==='object'&&v!==null&&!Array.isArray(r[k])&&!Array.isArray(v)){r[k]=m(r[k],v)}else{r[k]=v}}return r}
+fs.writeFileSync(process.argv[3],JSON.stringify(m(b,o),null,2));
 " "$_src_settings" "$_env_dir/.claude/settings.override.json" "$_env_dir/.claude/settings.json" 2>/dev/null || true
             fi
         fi
