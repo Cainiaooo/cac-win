@@ -18,3 +18,5 @@ CLAUDE.local.md
 docs/internal/
 
 .claude/
+
+package-lock.json

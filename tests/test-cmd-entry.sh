@@ -77,6 +77,13 @@ grep -q '_add_to_user_path' "$PROJECT_DIR/src/utils.sh" && pass "函数定义" |
 grep -q '_add_to_user_path' "$PROJECT_DIR/src/cmd_setup.sh" && pass "setup 中调用" || fail "setup 未调用"
 grep -q 'SetEnvironmentVariable' "$PROJECT_DIR/src/utils.sh" && pass "PowerShell SetEnvironmentVariable" || fail "缺 SetEnvironmentVariable"
 
+# ── E05b: 本地安装脚本 ──
+echo ""
+echo "[E05b] Windows 本地安装脚本"
+[[ -f "$PROJECT_DIR/scripts/install-local-win.ps1" ]] && pass "install-local-win.ps1 存在" || fail "缺少 install-local-win.ps1"
+grep -q 'cac local checkout shim' "$PROJECT_DIR/scripts/install-local-win.ps1" && pass "包含本地 shim 标记" || fail "缺少 shim 标记"
+grep -q 'Join-Path $env:APPDATA "npm"' "$PROJECT_DIR/scripts/install-local-win.ps1" && pass "使用 APPDATA npm 目录" || fail "未使用 APPDATA npm 目录"
+
 # ── E06: Windows 下实际测试 ──
 echo ""
 echo "[E06] Windows 下 CMD 入口实际测试"

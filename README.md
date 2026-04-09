@@ -76,31 +76,56 @@ curl -fsSL https://raw.githubusercontent.com/nmhjklnm/cac/master/install.sh | ba
 git clone https://github.com/nmhjklnm/cac.git
 cd cac
 npm install
+powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1
 
 # 验证入口（CMD / PowerShell 都可）
-.\cac.cmd -v
-.\cac.cmd help
+cac -v
+cac help
 ```
 
-首次使用建议直接从仓库根目录运行：
+如果 `cac` 仍然提示找不到命令，检查 npm 全局 bin 是否在 PATH 中：
+
+```powershell
+npm prefix -g
+```
+
+通常应为 `%APPDATA%\npm`。安装脚本会自动尝试写入用户 PATH；若未生效，手动把该目录加入用户 PATH，然后重开终端。
+
+首次使用：
 
 ```powershell
 # 安装 Claude Code 二进制
-.\cac.cmd claude install latest
+cac claude install latest
 
 # 创建 Windows 环境（可带代理，也可不带）
-.\cac.cmd env create win-work -p 1.2.3.4:1080:u:p
-.\cac.cmd env check
+cac env create win-work -p 1.2.3.4:1080:u:p
+cac env check
 
 # 启动 Claude Code（首次需 /login）
 claude
 ```
 
 说明：
+- `scripts/install-local-win.ps1` 会在 `%APPDATA%\npm` 里生成 `cac` / `cac.cmd` / `cac.ps1` shim，并自动尝试把该目录加入用户 PATH。
 - `cac.cmd` 是 Windows 入口，会自动查找 Git Bash 并委托给主 Bash 脚本。
 - 首次初始化后会生成 `%USERPROFILE%\.cac\bin\claude.cmd`。
 - 如果新开的 CMD / PowerShell 里还找不到 `claude`，重开终端一次；若仍找不到，把 `%USERPROFILE%\.cac\bin` 加入用户 PATH。
-- 在此分支验证期间，建议优先使用仓库根目录下的 `.\cac.cmd`，等正式发版后再切回 `npm install -g`。
+- 只有在你还没执行安装脚本时，才需要临时在仓库根目录下使用 `.\cac.cmd`。
+
+移除本地部署：
+
+```powershell
+# 先删除 cac 运行目录、wrapper、环境数据
+cac self delete
+
+# 再移除本地 checkout 安装的全局 shim
+powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1 -Uninstall
+
+# 如需清理仓库依赖
+Remove-Item -Recurse -Force .\node_modules
+```
+
+如果 `cac` 已经不可用，也可以直接手动删除 `%USERPROFILE%\.cac`，再执行 `powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1 -Uninstall`。
 
 ### 快速上手
 
@@ -300,31 +325,56 @@ Prerequisites:
 git clone https://github.com/nmhjklnm/cac.git
 cd cac
 npm install
+powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1
 
 # verify entrypoints from CMD or PowerShell
-.\cac.cmd -v
-.\cac.cmd help
+cac -v
+cac help
 ```
 
-For the first run, execute commands from the repository root:
+If `cac` is still not found, check your npm global bin directory:
+
+```powershell
+npm prefix -g
+```
+
+It is usually `%APPDATA%\npm`. The installer script tries to add it to your user PATH automatically; if it still is not available, add it manually and reopen the terminal.
+
+For the first run:
 
 ```powershell
 # install Claude Code binary
-.\cac.cmd claude install latest
+cac claude install latest
 
 # create a Windows environment (with or without proxy)
-.\cac.cmd env create win-work -p 1.2.3.4:1080:u:p
-.\cac.cmd env check
+cac env create win-work -p 1.2.3.4:1080:u:p
+cac env check
 
 # start Claude Code (first time: /login)
 claude
 ```
 
 Notes:
+- `scripts/install-local-win.ps1` creates `cac`, `cac.cmd`, and `cac.ps1` shims in `%APPDATA%\npm` and tries to add that directory to your user PATH.
 - `cac.cmd` is the Windows entrypoint. It locates Git Bash and delegates to the main Bash implementation.
 - First initialization generates `%USERPROFILE%\.cac\bin\claude.cmd`.
 - If `claude` is not available in a new CMD/PowerShell window, reopen the terminal once; if it still is not found, add `%USERPROFILE%\.cac\bin` to your user PATH.
-- While this branch is under validation, prefer running `.\cac.cmd` from the repo root. Switch back to `npm install -g` after the release is published.
+- Only fall back to `.\cac.cmd` from the repo root before running the installer script.
+
+Remove the local deployment:
+
+```powershell
+# remove cac runtime data, wrappers, and environments first
+cac self delete
+
+# remove the global shims created for the local checkout
+powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1 -Uninstall
+
+# optional: clean repository dependencies
+Remove-Item -Recurse -Force .\node_modules
+```
+
+If `cac` is already unavailable, you can delete `%USERPROFILE%\.cac` manually and then run `powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1 -Uninstall`.
 
 ### Quick start
 
