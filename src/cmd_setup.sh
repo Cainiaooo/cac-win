@@ -44,18 +44,15 @@ _ensure_initialized() {
     for _sf in "$ENVS_DIR"/*/.claude/settings.json; do
         [[ -f "$_sf" ]] || continue
         grep -q '"DISABLE_AUTOUPDATER"' "$_sf" 2>/dev/null && continue
-        python3 - "$_sf" << 'PYEOF' 2>/dev/null || true
-import json, sys
-path = sys.argv[1]
-with open(path) as f:
-    d = json.load(f)
-if d.get('env', {}).get('DISABLE_AUTOUPDATER') == '1':
-    sys.exit(0)
-d.setdefault('env', {})['DISABLE_AUTOUPDATER'] = '1'
-with open(path, 'w') as f:
-    json.dump(d, f, indent=2)
-    f.write('\n')
-PYEOF
+        node -e "
+const fs = require('fs');
+const path = process.argv[1];
+const d = JSON.parse(fs.readFileSync(path, 'utf8'));
+d.env = d.env || {};
+if (d.env.DISABLE_AUTOUPDATER === '1') process.exit(0);
+d.env.DISABLE_AUTOUPDATER = '1';
+fs.writeFileSync(path, JSON.stringify(d, null, 2) + '\n');
+" "$_sf" 2>/dev/null || true
     done
 
     # PATH (idempotent — always ensure it's in rc file)
@@ -81,7 +78,7 @@ PYEOF
     if [[ -z "$real_claude" ]]; then
         local latest_ver; latest_ver=$(_read "$VERSIONS_DIR/.latest" "")
         if [[ -n "$latest_ver" ]]; then
-            real_claude="$VERSIONS_DIR/$latest_ver/claude"
+            real_claude="$(_version_binary "$latest_ver")"
         fi
     fi
     if [[ -n "$real_claude" ]] && [[ -x "$real_claude" ]]; then

@@ -127,7 +127,13 @@ cmd_check() {
     [[ -f "$_cj" ]] || _cj="$HOME/.claude.json"
     if [[ -f "$_cj" ]]; then
         local _actual_uid
-        _actual_uid=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('userID',''))" "$_cj" 2>/dev/null || true)
+        _actual_uid=$(node -e "
+const fs = require('fs');
+try {
+  const d = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+  process.stdout.write(d.userID || '');
+} catch (_) {}
+" "$_cj" 2>/dev/null || true)
         if [[ -n "$_actual_uid" ]]; then
             (( _id_total++ )) || true
             echo "$_actual_uid" > "$env_dir/user_id" 2>/dev/null || true
@@ -160,6 +166,10 @@ cmd_check() {
         local ipv6_addrs
         ipv6_addrs=$(ip -6 addr show scope global 2>/dev/null | grep -c "inet6" || true)
         [[ "$ipv6_addrs" -gt 0 ]] && ipv6_leak=true
+    elif [[ "$os" == "windows" ]]; then
+        local ipv6_addrs
+        ipv6_addrs=$(ipconfig.exe 2>/dev/null | grep -ci "IPv6 Address" || true)
+        [[ "$ipv6_addrs" -gt 0 ]] && ipv6_leak=true
     fi
     if [[ "$ipv6_leak" == "true" ]]; then
         echo "    $(_yellow "⚠") IPv6       global address detected (potential leak)"
@@ -176,7 +186,7 @@ cmd_check() {
         fi
     fi
     local _claude_count
-    _claude_count=$(pgrep -x "claude" 2>/dev/null | wc -l | tr -d '[:space:]') || _claude_count=0
+    _claude_count=$(_count_claude_processes)
     local _max_sessions; _max_sessions=$(_cac_setting max_sessions 10)
     if [[ "$_claude_count" -gt "$_max_sessions" ]]; then
         echo "    $(_yellow "⚠") sessions   $_claude_count running (threshold: $_max_sessions)"
@@ -211,7 +221,13 @@ cmd_check() {
                 if [[ -n "$env_tz" ]] && [[ -n "$proxy_ip" ]]; then
                     local ip_tz
                     ip_tz=$(curl -s --proxy "$proxy" --connect-timeout 5 "http://ip-api.com/json/$proxy_ip?fields=timezone" 2>/dev/null | \
-                        python3 -c "import sys,json; print(json.load(sys.stdin).get('timezone',''))" 2>/dev/null || true)
+                        node -e "
+const fs = require('fs');
+try {
+  const d = JSON.parse(fs.readFileSync(0, 'utf8'));
+  process.stdout.write(d.timezone || '');
+} catch (_) {}
+" 2>/dev/null || true)
                     if [[ -n "$ip_tz" ]] && [[ "$ip_tz" != "$env_tz" ]]; then
                         echo "    $(_yellow "⚠") TZ        mismatch: env=$env_tz, IP=$ip_tz"
                         problems+=("TZ mismatch: env=$env_tz vs IP=$ip_tz")

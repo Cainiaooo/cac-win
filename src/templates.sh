@@ -167,6 +167,39 @@ _name=$(tr -d '[:space:]' < "$CAC_DIR/current")
 _env_dir="$ENVS_DIR/$_name"
 [[ -d "$_env_dir" ]] || { echo "[cac] error: environment '$_name' not found" >&2; exit 1; }
 
+_os="unknown"
+case "$(uname -s)" in
+    Darwin) _os="macos" ;;
+    Linux) _os="linux" ;;
+    MINGW*|MSYS*|CYGWIN*) _os="windows" ;;
+esac
+
+_tcp_ok() {
+    local _host="$1" _port="$2"
+    if (echo >"/dev/tcp/${_host}/${_port}") 2>/dev/null; then
+        return 0
+    fi
+    node -e "
+const net = require('net');
+const host = process.argv[1];
+const port = Number(process.argv[2]);
+const s = net.createConnection({ host, port, timeout: 2500 });
+s.on('connect', () => { s.destroy(); process.exit(0); });
+s.on('timeout', () => { s.destroy(); process.exit(1); });
+s.on('error', () => process.exit(1));
+" "$_host" "$_port" >/dev/null 2>&1
+}
+
+_count_claude() {
+    if [[ "$_os" == "windows" ]]; then
+        tasklist.exe //FO CSV //NH 2>/dev/null \
+            | tr -d '\r' \
+            | awk -F',' 'tolower($1) ~ /^"claude(\\.exe)?"$/ { c++ } END { print c+0 }'
+    else
+        (pgrep -x "claude" 2>/dev/null | wc -l | tr -d '[:space:]') || echo 0
+    fi
+}
+
 # Isolated .claude config directory
 if [[ -d "$_env_dir/.claude" ]]; then
     export CLAUDE_CONFIG_DIR="$_env_dir/.claude"
@@ -184,17 +217,19 @@ if [[ -d "$_env_dir/.claude" ]]; then
             # Skip merge if settings.json is newer than both inputs
             if [[ "$_src_settings" -nt "$_env_dir/.claude/settings.json" ]] || \
                [[ "$_env_dir/.claude/settings.override.json" -nt "$_env_dir/.claude/settings.json" ]]; then
-                python3 -c "
-import json,sys
-b=json.load(open(sys.argv[1]))
-o=json.load(open(sys.argv[2]))
-def m(b,o):
-    r=dict(b)
-    for k,v in o.items():
-        if k in r and isinstance(r[k],dict) and isinstance(v,dict): r[k]=m(r[k],v)
-        else: r[k]=v
-    return r
-json.dump(m(b,o),open(sys.argv[3],'w'),indent=2,ensure_ascii=False)
+                node -e "
+const fs = require('fs');
+const b = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+const o = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+function m(base, override) {
+  const r = { ...base };
+  for (const [k, v] of Object.entries(override)) {
+    if (r[k] && typeof r[k] === 'object' && !Array.isArray(r[k]) && v && typeof v === 'object' && !Array.isArray(v)) r[k] = m(r[k], v);
+    else r[k] = v;
+  }
+  return r;
+}
+fs.writeFileSync(process.argv[3], JSON.stringify(m(b, o), null, 2) + '\n');
 " "$_src_settings" "$_env_dir/.claude/settings.override.json" "$_env_dir/.claude/settings.json" 2>/dev/null || true
             fi
         fi
@@ -212,7 +247,7 @@ if [[ -n "$PROXY" ]]; then
     _hp="${PROXY##*@}"; _hp="${_hp##*://}"
     _host="${_hp%%:*}"
     _port="${_hp##*:}"
-    if ! (echo >/dev/tcp/"$_host"/"$_port") 2>/dev/null; then
+    if ! _tcp_ok "$_host" "$_port"; then
         echo "[cac] error: [$_name] proxy $_hp unreachable, refusing to start." >&2
         echo "[cac] hint: run 'cac check' to diagnose, or 'cac stop' to disable temporarily" >&2
         exit 1
@@ -393,7 +428,11 @@ fi
 _real=""
 if [[ -f "$_env_dir/version" ]]; then
     _ver=$(tr -d '[:space:]' < "$_env_dir/version")
-    _ver_bin="$CAC_DIR/versions/$_ver/claude"
+    if [[ "$_os" == "windows" ]]; then
+        _ver_bin="$CAC_DIR/versions/$_ver/claude.exe"
+    else
+        _ver_bin="$CAC_DIR/versions/$_ver/claude"
+    fi
     [[ -x "$_ver_bin" ]] && _real="$_ver_bin"
 fi
 if [[ -z "$_real" ]] || [[ ! -x "$_real" ]]; then
@@ -435,14 +474,14 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
     # start if not running
     if [[ "$_relay_running" != "true" ]]; then
         _rport=17890
-        while (echo >/dev/tcp/127.0.0.1/$_rport) 2>/dev/null; do
+        while _tcp_ok 127.0.0.1 "$_rport"; do
             (( _rport++ ))
             [[ $_rport -gt 17999 ]] && break
         done
         node "$_relay_js" "$_rport" "$PROXY" "$_relay_pid_file" </dev/null >"$CAC_DIR/relay.log" 2>&1 &
         disown
         for _ri in {1..30}; do
-            (echo >/dev/tcp/127.0.0.1/$_rport) 2>/dev/null && break
+            _tcp_ok 127.0.0.1 "$_rport" && break
             sleep 0.1
         done
         echo "$PROXY" > "$_relay_proxy_file"
@@ -471,7 +510,7 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
                     _rpid=$(tr -d '[:space:]' < "$CAC_DIR/relay.pid")
                     if kill -0 "$_rpid" 2>/dev/null; then
                         _rport=$(tr -d '[:space:]' < "$CAC_DIR/relay.port" 2>/dev/null || true)
-                        (echo >/dev/tcp/127.0.0.1/"$_rport") 2>/dev/null && continue
+                        _tcp_ok 127.0.0.1 "$_rport" && continue
                         # process alive but port unresponsive — kill and restart
                         kill "$_rpid" 2>/dev/null || true
                     fi
@@ -502,7 +541,7 @@ fi
 _max_sessions=10
 [[ -f "$CAC_DIR/max_sessions" ]] && _ms=$(tr -d '[:space:]' < "$CAC_DIR/max_sessions") && [[ -n "$_ms" ]] && _max_sessions="$_ms"
 # pgrep exits 1 when no match; with pipefail + set -e that would abort the wrapper
-_claude_count=$(pgrep -x "claude" 2>/dev/null | wc -l | tr -d '[:space:]') || _claude_count=0
+_claude_count=$(_count_claude)
 if [[ "$_claude_count" -gt "$_max_sessions" ]]; then
     echo "[cac] warning: $_claude_count claude sessions running (threshold: $_max_sessions)" >&2
     echo "[cac] hint: concurrent sessions on the same device may trigger detection" >&2

@@ -13,9 +13,16 @@ _cac_setting() {
     local settings="$CAC_DIR/settings.json"
     [[ -f "$settings" ]] || { echo "$default"; return; }
     local val
-    val=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get(sys.argv[2],''))" "$settings" "$key" 2>/dev/null || true)
+    val=$(node -e "
+const fs = require('fs');
+try {
+  const d = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+  const v = d[process.argv[2]];
+  process.stdout.write(v == null ? '' : String(v));
+} catch (_) {}
+" "$settings" "$key" 2>/dev/null || true)
     val="${val:-$default}"
-    # Sync hot-path keys as plain files (avoids python3 spawn in wrapper)
+    # Sync hot-path keys as plain files (avoids json parser spawn in wrapper)
     [[ "$key" == "max_sessions" ]] && echo "$val" > "$CAC_DIR/max_sessions"
     echo "$val"
 }
@@ -42,11 +49,11 @@ _gen_uuid() {
     elif [[ -f /proc/sys/kernel/random/uuid ]]; then
         cat /proc/sys/kernel/random/uuid
     else
-        python3 -c "import uuid; print(uuid.uuid4())" || _die "python3 required for UUID generation (install python3 or uuidgen)"
+        node -e "process.stdout.write(require('crypto').randomUUID())" || _die "node required for UUID generation (install Node.js or uuidgen)"
     fi
 }
 _new_uuid()    { _gen_uuid | tr '[:lower:]' '[:upper:]'; }
-_new_user_id() { python3 -c "import os; print(os.urandom(32).hex())" || _die "python3 required"; }
+_new_user_id() { node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" || _die "node required"; }
 _new_machine_id() { _gen_uuid | tr -d '-' | tr '[:upper:]' '[:lower:]'; }
 _new_hostname() {
     local -a _first_names=(
@@ -102,12 +109,30 @@ _proxy_host_port() {
     echo "$1" | sed 's|.*@||' | sed 's|.*://||'
 }
 
+_tcp_check() {
+    local host="$1" port="$2"
+    # Fast path: /dev/tcp (works on Unix-like bash builds)
+    if (echo >"/dev/tcp/$host/$port") 2>/dev/null; then
+        return 0
+    fi
+    # Fallback: Node.js socket probe (required for Git Bash compatibility)
+    node -e "
+const net = require('net');
+const host = process.argv[1];
+const port = Number(process.argv[2]);
+const s = net.createConnection({ host, port, timeout: 2500 });
+s.on('connect', () => { s.destroy(); process.exit(0); });
+s.on('timeout', () => { s.destroy(); process.exit(1); });
+s.on('error', () => process.exit(1));
+" "$host" "$port" >/dev/null 2>&1
+}
+
 _proxy_reachable() {
     local hp host port
     hp=$(_proxy_host_port "$1")
     host=$(echo "$hp" | cut -d: -f1)
     port=$(echo "$hp" | cut -d: -f2)
-    (echo >/dev/tcp/"$host"/"$port") 2>/dev/null
+    _tcp_check "$host" "$port"
 }
 
 # Auto-detect proxy protocol (when user didn't specify http/socks5/https)
@@ -184,7 +209,11 @@ _resolve_version() {
 }
 
 _version_binary() {
-    echo "$VERSIONS_DIR/$1/claude"
+    local ver="$1"
+    case "$(_detect_os)" in
+        windows) echo "$VERSIONS_DIR/$ver/claude.exe" ;;
+        *)       echo "$VERSIONS_DIR/$ver/claude" ;;
+    esac
 }
 
 _detect_platform() {
@@ -192,6 +221,7 @@ _detect_platform() {
     case "$(uname -s)" in
         Darwin) os="darwin" ;;
         Linux)  os="linux" ;;
+        MINGW*|MSYS*|CYGWIN*) os="win32" ;;
         *) echo "unsupported" ; return 1 ;;
     esac
     case "$(uname -m)" in
@@ -215,9 +245,32 @@ _detect_platform() {
 }
 
 _sha256() {
-    case "$(uname -s)" in
-        Darwin) shasum -a 256 "$1" | cut -d' ' -f1 ;;
-        *)      sha256sum "$1" | cut -d' ' -f1 ;;
+    local file="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | cut -d' ' -f1
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | cut -d' ' -f1
+    else
+        node -e "
+const fs = require('fs');
+const crypto = require('crypto');
+const b = fs.readFileSync(process.argv[1]);
+process.stdout.write(crypto.createHash('sha256').update(b).digest('hex'));
+" "$file"
+    fi
+}
+
+_count_claude_processes() {
+    case "$(_detect_os)" in
+        windows)
+            # Filter tasklist output by image name; when no match, output is empty
+            tasklist.exe //FO CSV //NH 2>/dev/null \
+                | tr -d '\r' \
+                | awk -F',' 'tolower($1) ~ /^"claude(\\.exe)?"$/ { c++ } END { print c+0 }'
+            ;;
+        *)
+            (pgrep -x "claude" 2>/dev/null | wc -l | tr -d '[:space:]') || echo 0
+            ;;
     esac
 }
 
@@ -399,22 +452,21 @@ _update_claude_json_user_id() {
         fst=$(tr -d '[:space:]' < "$ENVS_DIR/$current_env/first_start_time")
     fi
 
-    python3 - "$claude_json" "$user_id" "$fst" << 'PYEOF'
-import json, sys, uuid
-fpath, uid, fst = sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else ""
-with open(fpath) as f:
-    d = json.load(f)
-d['userID'] = uid
-d['anonymousId'] = 'claudecode.v1.' + str(uuid.uuid4())
-d.pop('numStartups', None)
-if fst:
-    d['firstStartTime'] = fst
-else:
-    d.pop('firstStartTime', None)
-d.pop('cachedGrowthBookFeatures', None)
-d.pop('cachedStatsigGates', None)
-with open(fpath, 'w') as f:
-    json.dump(d, f, indent=2, ensure_ascii=False)
-PYEOF
+    node -e "
+const fs = require('fs');
+const crypto = require('crypto');
+const fpath = process.argv[1];
+const uid = process.argv[2];
+const fst = process.argv[3] || '';
+const d = JSON.parse(fs.readFileSync(fpath, 'utf8'));
+d.userID = uid;
+d.anonymousId = 'claudecode.v1.' + crypto.randomUUID();
+delete d.numStartups;
+if (fst) d.firstStartTime = fst;
+else delete d.firstStartTime;
+delete d.cachedGrowthBookFeatures;
+delete d.cachedStatsigGates;
+fs.writeFileSync(fpath, JSON.stringify(d, null, 2) + '\n');
+" "$claude_json" "$user_id" "$fst"
     [[ $? -eq 0 ]] || echo "warning: failed to update claude.json userID" >&2
 }
