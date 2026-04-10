@@ -459,6 +459,13 @@ _dk_cmd_destroy() {
 # ── Docker command dispatcher ────────────────────────────────────────
 
 cmd_docker() {
+  local _os; _os=$(_detect_os)
+  if [[ "$_os" == "windows" ]]; then
+      echo "error: 'cac docker' requires native Linux (sing-box TUN isolation)" >&2
+      echo "  Windows users: use WSL2 with Docker Desktop, or use 'cac env' directly" >&2
+      return 1
+  fi
+
   local subcmd="${1:-}"
   shift 2>/dev/null || true
 

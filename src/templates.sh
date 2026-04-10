@@ -438,7 +438,7 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
             [[ $_rport -gt 17999 ]] && break
         done
         node "$_relay_js" "$_rport" "$PROXY" "$_relay_pid_file" </dev/null >"$CAC_DIR/relay.log" 2>&1 &
-        disown
+        disown 2>/dev/null || true
         for _ri in {1..30}; do
             _tcp_check 127.0.0.1 "$_rport" && break
             sleep 0.1
@@ -483,7 +483,7 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
         ) &
         _new_wpid=$!
         echo "$_new_wpid" > "$_relay_watchdog_file"
-        disown "$_new_wpid"
+        disown "$_new_wpid" 2>/dev/null || true
     fi
 
     # override proxy to point to local relay

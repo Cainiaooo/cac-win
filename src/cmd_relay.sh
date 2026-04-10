@@ -21,7 +21,7 @@ _relay_start() {
 
     local pid_file="$CAC_DIR/relay.pid"
     node "$relay_js" "$port" "$proxy" "$pid_file" </dev/null >"$CAC_DIR/relay.log" 2>&1 &
-    disown
+    disown 2>/dev/null || true
 
     # wait for relay ready
     local _i
