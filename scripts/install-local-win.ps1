@@ -7,10 +7,19 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-$npmBin = if ($env:APPDATA) {
-    Join-Path $env:APPDATA "npm"
-} else {
-    throw "APPDATA is not set"
+$npmBin = $null
+try {
+    $npmPrefix = (& npm config get prefix 2>$null)
+    if ($npmPrefix -and (Test-Path $npmPrefix)) {
+        $npmBin = $npmPrefix
+    }
+} catch {}
+if (-not $npmBin) {
+    if ($env:APPDATA) {
+        $npmBin = Join-Path $env:APPDATA "npm"
+    } else {
+        throw "Cannot determine npm global bin directory. Ensure npm is installed and in PATH."
+    }
 }
 
 $cmdShim = Join-Path $npmBin "cac.cmd"
