@@ -207,7 +207,7 @@ grep -q 'http://ip-api.com/json/?fields=query,timezone' "$PROJECT_DIR/src/cmd_ch
 echo ""
 echo "[T18] Windows OpenSSL 选择"
 grep -q '^_openssl()' "$PROJECT_DIR/src/mtls.sh" && pass "_openssl helper 已定义" || fail "_openssl helper 未定义"
-grep -q '/c/Development/Git/mingw64/bin/openssl.exe' "$PROJECT_DIR/src/mtls.sh" && pass "优先使用显式 Git OpenSSL 路径" || fail "未优先使用显式 Git OpenSSL 路径"
+grep -q '/c/Program Files/Git/mingw64/bin/openssl.exe' "$PROJECT_DIR/src/mtls.sh" && pass "优先 Git for Windows 标准 OpenSSL 路径" || fail "缺少 Git for Windows 标准 OpenSSL 路径"
 
 # ── T19: env check read 兼容 set -e ──
 echo ""

@@ -169,7 +169,12 @@ try {
         [[ "$ipv6_addrs" -gt 0 ]] && ipv6_leak=true
     elif [[ "$os" == "windows" ]]; then
         local ipv6_addrs
-        ipv6_addrs=$(ipconfig.exe 2>/dev/null | grep -ci "IPv6 Address" || true)
+        # Match IPv6 global unicast addresses (2000::/3) by pattern, not by label.
+        # Localized Windows shows "IPv6 地址" / "IPv6 アドレス" instead of "IPv6 Address",
+        # so matching the address itself is the only locale-safe approach.
+        # Requires 4 hex chars in the first group to avoid false-positives on
+        # time strings like "23:30:00" in DHCP lease lines.
+        ipv6_addrs=$(ipconfig.exe 2>/dev/null | grep -cE '[[:space:]][23][0-9a-fA-F]{3}:[0-9a-fA-F:]+' || true)
         [[ "$ipv6_addrs" -gt 0 ]] && ipv6_leak=true
     fi
     if [[ "$ipv6_leak" == "true" ]]; then

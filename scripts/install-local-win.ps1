@@ -7,20 +7,26 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-$npmBin = $null
-try {
-    $npmPrefix = (& npm config get prefix 2>$null)
-    if ($npmPrefix -and (Test-Path $npmPrefix)) {
-        $npmBin = $npmPrefix
-    }
-} catch {}
-if (-not $npmBin) {
+
+# Resolve npm global bin directory dynamically so users with custom Node setups
+# (nvm-windows, fnm, volta, Scoop) get shims in a directory that's actually on PATH.
+# Falls back to %APPDATA%\npm if `npm config get prefix` is unavailable.
+function Get-NpmGlobalBin {
+    try {
+        $npmCmd = Get-Command npm -ErrorAction Stop
+        $prefix = (& $npmCmd.Source config get prefix 2>$null | Select-Object -First 1)
+        if ($prefix) {
+            $prefix = $prefix.Trim()
+            if ($prefix) { return $prefix }
+        }
+    } catch {}
     if ($env:APPDATA) {
-        $npmBin = Join-Path $env:APPDATA "npm"
-    } else {
-        throw "Cannot determine npm global bin directory. Ensure npm is installed and in PATH."
+        return (Join-Path $env:APPDATA "npm")
     }
+    throw "Cannot determine npm global bin directory: npm not found and APPDATA is not set"
 }
+
+$npmBin = Get-NpmGlobalBin
 
 $cmdShim = Join-Path $npmBin "cac.cmd"
 $psShim = Join-Path $npmBin "cac.ps1"
