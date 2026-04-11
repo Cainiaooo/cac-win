@@ -7,17 +7,18 @@ _openssl() {
             # Prefer explicit Git for Windows MinGW paths.
             # /usr/bin/openssl.exe can fail with "couldn't create signal pipe"
             # when invoked from non-MSYS parent processes.
-            if [[ -x "/c/Development/Git/mingw64/bin/openssl.exe" ]]; then
-                openssl_bin="/c/Development/Git/mingw64/bin/openssl.exe"
-            elif [[ -x "/c/Program Files/Git/mingw64/bin/openssl.exe" ]]; then
-                openssl_bin="/c/Program Files/Git/mingw64/bin/openssl.exe"
-            elif [[ -x "/mingw64/bin/openssl.exe" ]]; then
-                openssl_bin="/mingw64/bin/openssl.exe"
-            elif [[ -x "/ucrt64/bin/openssl.exe" ]]; then
-                openssl_bin="/ucrt64/bin/openssl.exe"
-            elif [[ -x "/clang64/bin/openssl.exe" ]]; then
-                openssl_bin="/clang64/bin/openssl.exe"
-            fi
+            local _candidate
+            for _candidate in \
+                "/c/Program Files/Git/mingw64/bin/openssl.exe" \
+                "/c/Program Files (x86)/Git/mingw64/bin/openssl.exe" \
+                "/mingw64/bin/openssl.exe" \
+                "/ucrt64/bin/openssl.exe" \
+                "/clang64/bin/openssl.exe"; do
+                if [[ -x "$_candidate" ]]; then
+                    openssl_bin="$_candidate"
+                    break
+                fi
+            done
             ;;
     esac
     "$openssl_bin" "$@"

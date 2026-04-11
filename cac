@@ -922,17 +922,18 @@ _openssl() {
             # Prefer explicit Git for Windows MinGW paths.
             # /usr/bin/openssl.exe can fail with "couldn't create signal pipe"
             # when invoked from non-MSYS parent processes.
-            if [[ -x "/c/Development/Git/mingw64/bin/openssl.exe" ]]; then
-                openssl_bin="/c/Development/Git/mingw64/bin/openssl.exe"
-            elif [[ -x "/c/Program Files/Git/mingw64/bin/openssl.exe" ]]; then
-                openssl_bin="/c/Program Files/Git/mingw64/bin/openssl.exe"
-            elif [[ -x "/mingw64/bin/openssl.exe" ]]; then
-                openssl_bin="/mingw64/bin/openssl.exe"
-            elif [[ -x "/ucrt64/bin/openssl.exe" ]]; then
-                openssl_bin="/ucrt64/bin/openssl.exe"
-            elif [[ -x "/clang64/bin/openssl.exe" ]]; then
-                openssl_bin="/clang64/bin/openssl.exe"
-            fi
+            local _candidate
+            for _candidate in \
+                "/c/Program Files/Git/mingw64/bin/openssl.exe" \
+                "/c/Program Files (x86)/Git/mingw64/bin/openssl.exe" \
+                "/mingw64/bin/openssl.exe" \
+                "/ucrt64/bin/openssl.exe" \
+                "/clang64/bin/openssl.exe"; do
+                if [[ -x "$_candidate" ]]; then
+                    openssl_bin="$_candidate"
+                    break
+                fi
+            done
             ;;
     esac
     "$openssl_bin" "$@"
@@ -2715,7 +2716,12 @@ try {
         [[ "$ipv6_addrs" -gt 0 ]] && ipv6_leak=true
     elif [[ "$os" == "windows" ]]; then
         local ipv6_addrs
-        ipv6_addrs=$(ipconfig.exe 2>/dev/null | grep -ci "IPv6 Address" || true)
+        # Match IPv6 global unicast addresses (2000::/3) by pattern, not by label.
+        # Localized Windows shows "IPv6 地址" / "IPv6 アドレス" instead of "IPv6 Address",
+        # so matching the address itself is the only locale-safe approach.
+        # Requires 4 hex chars in the first group to avoid false-positives on
+        # time strings like "23:30:00" in DHCP lease lines.
+        ipv6_addrs=$(ipconfig.exe 2>/dev/null | grep -cE '[[:space:]][23][0-9a-fA-F]{3}:[0-9a-fA-F:]+' || true)
         [[ "$ipv6_addrs" -gt 0 ]] && ipv6_leak=true
     fi
     if [[ "$ipv6_leak" == "true" ]]; then

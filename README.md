@@ -55,6 +55,8 @@
 
 ### 安装
 
+#### macOS / Linux
+
 ```bash
 # npm（推荐）
 npm install -g claude-cac
@@ -63,69 +65,108 @@ npm install -g claude-cac
 curl -fsSL https://raw.githubusercontent.com/nmhjklnm/cac/master/install.sh | bash
 ```
 
-### Windows 本地部署（当前分支）
+#### Windows
 
-> 当前 Windows 支持已合入仓库，但如果你使用的是尚未发布的新分支，请先 **clone 到本地运行**，不要等待云端或 npm 更新。
+**前置要求**：Windows 10/11 + [Git for Windows](https://git-scm.com/download/win)（必须包含 Git Bash） + Node.js 18+
 
-前置要求：
-- Windows 10/11
-- Git for Windows（必须包含 Git Bash）
-- Node.js 18+
+两种安装方式，选其一：
+
+**方式 A — npm 安装（已发布到 npm 后使用）**
+
+```powershell
+npm install -g claude-cac
+```
+
+安装完成后 `cac` 命令即可在 CMD / PowerShell / Git Bash 中使用。
+
+**方式 B — 本地 checkout（开发者 / 测试未发布版本）**
 
 ```powershell
 git clone https://github.com/nmhjklnm/cac.git
 cd cac
-npm install
 powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1
-
-# 验证入口（CMD / PowerShell 都可）
-cac -v
-cac help
 ```
 
-如果 `cac` 仍然提示找不到命令，检查 npm 全局 bin 是否在 PATH 中：
+安装脚本会在 npm 全局目录中生成 shim（自动探测 `npm config get prefix`），并将该目录加入用户 PATH。
 
-```powershell
-npm prefix -g
-```
+> **找不到 `cac` 命令？** 重新打开终端窗口。如果仍然找不到，运行 `npm prefix -g` 确认该目录在 PATH 中。使用 nvm-windows / fnm / volta 的用户无需额外操作，安装脚本会自动适配。
 
-通常应为 `%APPDATA%\npm`。安装脚本会自动尝试写入用户 PATH；若未生效，手动把该目录加入用户 PATH，然后重开终端。
-
-首次使用：
+**首次使用**
 
 ```powershell
 # 安装 Claude Code 二进制
 cac claude install latest
 
-# 创建 Windows 环境（可带代理，也可不带）
-cac env create win-work -p 1.2.3.4:1080:u:p
+# 创建环境（代理可选）
+cac env create work -p 1.2.3.4:1080:u:p
+
+# 验证隐私保护状态
 cac env check
 
-# 启动 Claude Code（首次需 /login）
+# 启动 Claude Code（首次需输入 /login 完成授权）
 claude
 ```
 
-说明：
-- `scripts/install-local-win.ps1` 会在 `%APPDATA%\npm` 里生成 `cac` / `cac.cmd` / `cac.ps1` shim，并自动尝试把该目录加入用户 PATH。
-- `cac.cmd` 是 Windows 入口，会自动查找 Git Bash 并委托给主 Bash 脚本。
-- 首次初始化后会生成 `%USERPROFILE%\.cac\bin\claude.cmd`。
-- 如果新开的 CMD / PowerShell 里还找不到 `claude`，重开终端一次；若仍找不到，把 `%USERPROFILE%\.cac\bin` 加入用户 PATH。
-- 只有在你还没执行安装脚本时，才需要临时在仓库根目录下使用 `.\cac.cmd`。
+首次初始化后会自动生成 `%USERPROFILE%\.cac\bin\claude.cmd`。如果新终端里找不到 `claude`，把 `%USERPROFILE%\.cac\bin` 加入用户 PATH 后重开终端。
 
-移除本地部署：
+#### Windows 更新同步
+
+cac 更新后，需要同步本地安装才能使用新功能和修复：
+
+**方式 A — npm 安装用户**
 
 ```powershell
-# 先删除 cac 运行目录、wrapper、环境数据
+npm update -g claude-cac
+```
+
+npm 的 `postinstall` 会自动同步运行时文件（`fingerprint-hook.js`、`cac-dns-guard.js`、`relay.js`）到 `~/.cac/` 并触发 wrapper 重建。
+
+**方式 B — 本地 checkout 用户**
+
+```bash
+# 拉取最新代码并重建
+git pull
+bash build.sh
+```
+
+`build.sh` 重新生成 `cac` 脚本后立即生效（shim 直接指向本地 checkout 目录）。
+
+如果本次更新涉及 JS 运行时文件的修改（`fingerprint-hook.js`、`relay.js`、`cac-dns-guard.js`），还需要同步到 `~/.cac/`：
+
+```bash
+# 方式一：手动复制（最快）
+cp cac-dns-guard.js fingerprint-hook.js relay.js ~/.cac/
+
+# 方式二：运行任意 cac 命令触发自动同步
+cac env ls
+```
+
+> **如何判断是否需要同步 JS 文件？** 查看 `git diff` 输出，如果只改了 `src/*.sh` 文件则不需要。如果改了 `src/fingerprint-hook.js`、`src/relay.js` 或 `src/dns_block.sh`（包含 `cac-dns-guard.js`），则需要同步。
+
+#### Windows 卸载
+
+```powershell
+# 1. 删除 cac 运行目录、wrapper、环境数据
 cac self delete
 
-# 再移除本地 checkout 安装的全局 shim
+# 2. 移除全局 shim
+#    npm 安装用户：
+npm uninstall -g claude-cac
+#    本地 checkout 用户：
 powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1 -Uninstall
 
-# 如需清理仓库依赖
+# 3.（可选）清理仓库
 Remove-Item -Recurse -Force .\node_modules
 ```
 
-如果 `cac` 已经不可用，也可以直接手动删除 `%USERPROFILE%\.cac`，再执行 `powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1 -Uninstall`。
+如果 `cac` 已经不可用，可直接删除 `%USERPROFILE%\.cac` 目录。
+
+#### Windows 已知限制
+
+- **Git Bash 是硬依赖** — 核心逻辑用 Bash 实现，Windows 入口（`cac.cmd` / `cac.ps1`）会自动查找 Git Bash 并委托执行。未安装 Git Bash 时会给出明确报错和下载链接。
+- **Shell shim 层不适用** — `shim-bin/` 下的指纹拦截脚本（`ioreg`、`ifconfig`、`hostname`、`cat`）是 Unix 命令，Windows 上不生效。Windows 的指纹保护完全依赖 Node.js 层的 `fingerprint-hook.js`（拦截 `wmic`、`reg query` 等调用）。
+- **Docker 容器模式仅 Linux** — sing-box TUN 网络隔离目前不支持 Windows。可通过 WSL2 + Docker Desktop 作为替代方案。
+- 完整的 Windows 支持评估和已知问题见 [`docs/windows/`](docs/windows/)。
 
 ### 快速上手
 
@@ -304,6 +345,8 @@ cac docker port 6287 # 端口转发
 
 ### Install
 
+#### macOS / Linux
+
 ```bash
 # npm (recommended)
 npm install -g claude-cac
@@ -312,69 +355,108 @@ npm install -g claude-cac
 curl -fsSL https://raw.githubusercontent.com/nmhjklnm/cac/master/install.sh | bash
 ```
 
-### Windows local deployment (current branch)
+#### Windows
 
-> Windows support is implemented in this branch, but if you are testing changes before the next release, use a **local checkout** instead of waiting for npm/cloud rollout.
+**Prerequisites**: Windows 10/11 + [Git for Windows](https://git-scm.com/download/win) (must include Git Bash) + Node.js 18+
 
-Prerequisites:
-- Windows 10/11
-- Git for Windows with Git Bash
-- Node.js 18+
+Choose one of the following:
+
+**Option A — npm install (after npm release)**
+
+```powershell
+npm install -g claude-cac
+```
+
+After installation, `cac` is available in CMD, PowerShell, and Git Bash.
+
+**Option B — local checkout (developers / testing unreleased changes)**
 
 ```powershell
 git clone https://github.com/nmhjklnm/cac.git
 cd cac
-npm install
 powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1
-
-# verify entrypoints from CMD or PowerShell
-cac -v
-cac help
 ```
 
-If `cac` is still not found, check your npm global bin directory:
+The installer creates shims in the npm global directory (auto-detected via `npm config get prefix`) and adds it to your user PATH. Works with nvm-windows, fnm, volta, and Scoop out of the box.
 
-```powershell
-npm prefix -g
-```
+> **`cac` not found?** Reopen your terminal. If still missing, run `npm prefix -g` to verify the directory is on your PATH.
 
-It is usually `%APPDATA%\npm`. The installer script tries to add it to your user PATH automatically; if it still is not available, add it manually and reopen the terminal.
-
-For the first run:
+**First run**
 
 ```powershell
 # install Claude Code binary
 cac claude install latest
 
-# create a Windows environment (with or without proxy)
-cac env create win-work -p 1.2.3.4:1080:u:p
+# create an environment (proxy is optional)
+cac env create work -p 1.2.3.4:1080:u:p
+
+# verify privacy protection status
 cac env check
 
-# start Claude Code (first time: /login)
+# start Claude Code (first time: type /login to authorize)
 claude
 ```
 
-Notes:
-- `scripts/install-local-win.ps1` creates `cac`, `cac.cmd`, and `cac.ps1` shims in `%APPDATA%\npm` and tries to add that directory to your user PATH.
-- `cac.cmd` is the Windows entrypoint. It locates Git Bash and delegates to the main Bash implementation.
-- First initialization generates `%USERPROFILE%\.cac\bin\claude.cmd`.
-- If `claude` is not available in a new CMD/PowerShell window, reopen the terminal once; if it still is not found, add `%USERPROFILE%\.cac\bin` to your user PATH.
-- Only fall back to `.\cac.cmd` from the repo root before running the installer script.
+First initialization auto-generates `%USERPROFILE%\.cac\bin\claude.cmd`. If `claude` is not found in a new terminal, add `%USERPROFILE%\.cac\bin` to your user PATH and reopen.
 
-Remove the local deployment:
+#### Windows update sync
+
+After cac receives updates, sync your local installation to get new features and fixes:
+
+**Option A — npm install users**
 
 ```powershell
-# remove cac runtime data, wrappers, and environments first
+npm update -g claude-cac
+```
+
+The `postinstall` script automatically syncs runtime JS files (`fingerprint-hook.js`, `cac-dns-guard.js`, `relay.js`) to `~/.cac/` and triggers wrapper regeneration.
+
+**Option B — local checkout users**
+
+```bash
+# pull latest and rebuild
+git pull
+bash build.sh
+```
+
+The rebuilt `cac` takes effect immediately (shims point to your local checkout).
+
+If the update changed JS runtime files (`fingerprint-hook.js`, `relay.js`, or `cac-dns-guard.js`), also sync them to `~/.cac/`:
+
+```bash
+# option 1: manual copy (fastest)
+cp cac-dns-guard.js fingerprint-hook.js relay.js ~/.cac/
+
+# option 2: run any cac command to trigger auto-sync
+cac env ls
+```
+
+> **Do I need to sync JS files?** Check `git diff` — if only `src/*.sh` files changed, no sync is needed. If `src/fingerprint-hook.js`, `src/relay.js`, or `src/dns_block.sh` (which contains `cac-dns-guard.js`) changed, sync is required.
+
+#### Windows uninstall
+
+```powershell
+# 1. remove cac runtime data, wrappers, and environments
 cac self delete
 
-# remove the global shims created for the local checkout
+# 2. remove global shims
+#    npm install users:
+npm uninstall -g claude-cac
+#    local checkout users:
 powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1 -Uninstall
 
-# optional: clean repository dependencies
+# 3. (optional) clean repository
 Remove-Item -Recurse -Force .\node_modules
 ```
 
-If `cac` is already unavailable, you can delete `%USERPROFILE%\.cac` manually and then run `powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1 -Uninstall`.
+If `cac` is already unavailable, delete `%USERPROFILE%\.cac` directly.
+
+#### Windows known limitations
+
+- **Git Bash is a hard dependency** — core logic is written in Bash. Windows entry points (`cac.cmd` / `cac.ps1`) auto-locate Git Bash and delegate to it. A clear error message with a download link is shown if Git Bash is not installed.
+- **Shell shim layer is inactive** — `shim-bin/` scripts (`ioreg`, `ifconfig`, `hostname`, `cat`) are Unix commands and have no effect on Windows. Windows fingerprint protection relies entirely on the Node.js `fingerprint-hook.js` layer (intercepts `wmic`, `reg query`, etc.).
+- **Docker mode is Linux-only** — sing-box TUN network isolation does not support Windows. Use WSL2 + Docker Desktop as an alternative.
+- See [`docs/windows/`](docs/windows/) for the full Windows support assessment and known issues.
 
 ### Quick start
 
