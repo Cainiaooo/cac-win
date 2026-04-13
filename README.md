@@ -1,522 +1,215 @@
-<div align="center">
+# cac-win
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/logo-light.svg">
-  <img alt="cac" src="docs/images/logo-light.svg" width="200">
-</picture>
+这是面向 **Windows 本地使用** 的 cac 适配仓库。
 
-**Claude Code 小雨衣** — Isolate, protect, and manage your Claude Code.
+> 重点：本仓库 **没有发布到 npm**。不要用 `npm install -g claude-cac` 安装本仓库；那个命令安装的是上游 `nmhjklnm/cac`。使用本仓库时必须先 clone 到本地，再运行本地安装脚本。
 
-*Run Claude Code your way — isolated, protected, managed.*
+## 项目定位
 
-**[中文](#中文) | [English](#english) | [:book: Docs](https://cac.nextmind.space/docs)**
+`cac-win` 保留上游 cac 的 Claude Code 环境管理能力，但 README 只保留 Windows 使用路径：
 
-[![npm version](https://img.shields.io/npm/v/claude-cac.svg)](https://www.npmjs.com/package/claude-cac)
-[![GitHub stars](https://img.shields.io/github/stars/nmhjklnm/cac?style=social)](https://github.com/nmhjklnm/cac)
-[![Docs](https://img.shields.io/badge/Docs-cac.nextmind.space-D97706.svg)](https://cac.nextmind.space/docs)
-[![Telegram](https://img.shields.io/badge/Telegram-Community-2CA5E0?logo=telegram)](https://t.me/claudecodecloak)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)]()
+- Windows 10/11 下通过 CMD、PowerShell 或 Git Bash 使用
+- `cac.cmd` / `cac.ps1` 自动查找 Git Bash，并委托给 Bash 主实现
+- 通过 `scripts/install-local-win.ps1` 注册本地 checkout 的 `cac` 命令
+- 初始化后生成 `%USERPROFILE%\.cac\bin\claude.cmd`
+- Windows 下环境 clone 默认使用复制模式，避免 NTFS 符号链接权限问题
 
-:star: Star this repo if it helps — it helps others find it too.
+完整的上游式跨平台 README 已归档到 [docs/original-readme.md](docs/original-readme.md)。其中的 npm 安装/更新说明只适用于上游包，不代表本仓库已发布到 npm。
 
-</div>
+## 前置要求
 
----
-
-<a id="中文"></a>
-
-## 中文
-
-> **[Switch to English](#english)**
-
-### 简介
-
-**cac** 是 Claude Code 的环境管理器，类似 uv 之于 Python：
-
-- **版本管理** — 安装、切换、回滚 Claude Code 版本
-- **环境隔离** — 每个环境独立的 `.claude` 配置 + 身份 + 代理
-- **隐私保护** — 设备指纹伪装 + 遥测分级（`conservative`/`aggressive`）+ mTLS
-- **配置继承** — `--clone` 从宿主或其他环境继承配置，`~/.cac/settings.json` 全局偏好
-- **零配置** — 无需 setup，首次使用自动初始化
-
-### 注意事项
-
-> **封号风险说明**：cac 提供设备指纹层保护（UUID、主机名、MAC、遥测阻断、配置隔离），但**无法影响账号层风险**——包括 OAuth 账号本身、支付方式指纹、IP 信誉评分，以及 Anthropic 的服务端封禁决策。封号是账号层问题，cac 对此无能为力。详见 [封号风险 FAQ](https://cac.nextmind.space/docs/zh/guides/ban-risk)。
-
-> **代理工具冲突**：如果本地启动了 Clash、Shadowrocket、Surge、sing-box 等代理/VPN 工具，建议在使用 cac 时先关闭。TUN 模式兼容性仍属实验性功能。即使发生冲突，cac 也会自动停止连接（fail-closed），**不会泄露你的真实 IP**。
-
-- **首次登录**：启动 `claude` 后，输入 `/login` 完成 OAuth 授权
-- **安全验证**：随时运行 `cac env check` 确认隐私保护状态，也可以 `which claude` 确认使用的是 cac 托管的 claude
-- **自动安全检查**：每次启动 Claude Code 会话时，cac 会快速检查环境。如有异常会终止会话，不会发送任何数据
-- **网络稳定性**：流量严格走代理——代理断开时流量完全停止，不会回退直连。内置心跳检测和自动恢复，断线后无需手动重启
-- **IPv6**：建议系统级关闭，防止真实地址泄露
-
-### 安装
-
-```bash
-# npm（推荐）
-npm install -g claude-cac
-
-# 或手动安装
-curl -fsSL https://raw.githubusercontent.com/nmhjklnm/cac/master/install.sh | bash
-```
-
-### Windows 本地部署（当前分支）
-
-> 当前 Windows 支持已合入仓库，但如果你使用的是尚未发布的新分支，请先 **clone 到本地运行**，不要等待云端或 npm 更新。
-
-前置要求：
 - Windows 10/11
-- Git for Windows（必须包含 Git Bash）
-- Node.js 18+
+- Git for Windows，必须包含 Git Bash
+- Node.js 18+，并确保 npm 在 PATH 中
+- PowerShell 5.1+
+
+## 本地安装
 
 ```powershell
-git clone https://github.com/nmhjklnm/cac.git
-cd cac
-npm install
-powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1
+git clone https://github.com/Cainiaooo/cac-win.git
+cd cac-win
 
-# 验证入口（CMD / PowerShell 都可）
+# 安装当前 checkout 的本地依赖
+npm install
+
+# 把当前 checkout 注册为全局 cac 命令
+powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1
+```
+
+安装完成后，重新打开 CMD、PowerShell 或 Git Bash，再验证：
+
+```powershell
 cac -v
 cac help
 ```
 
-如果 `cac` 仍然提示找不到命令，检查 npm 全局 bin 是否在 PATH 中：
+如果提示找不到 `cac`，检查 npm 全局 bin 目录是否在用户 PATH 中：
 
 ```powershell
 npm prefix -g
 ```
 
-通常应为 `%APPDATA%\npm`。安装脚本会自动尝试写入用户 PATH；若未生效，手动把该目录加入用户 PATH，然后重开终端。
+常见路径是 `%APPDATA%\npm`。安装脚本会自动尝试写入用户 PATH；如果当前终端没有刷新，重开终端后再试。
 
-首次使用：
+## 首次使用
 
 ```powershell
-# 安装 Claude Code 二进制
+# 安装 cac 托管的 Claude Code 二进制
 cac claude install latest
 
-# 创建 Windows 环境（可带代理，也可不带）
+# 创建并激活 Windows 环境；代理可按需填写
 cac env create win-work -p 1.2.3.4:1080:u:p
+
+# 检查当前环境
 cac env check
 
-# 启动 Claude Code（首次需 /login）
+# 启动 Claude Code；首次进入后使用 /login
 claude
 ```
 
-说明：
-- `scripts/install-local-win.ps1` 会在 `%APPDATA%\npm` 里生成 `cac` / `cac.cmd` / `cac.ps1` shim，并自动尝试把该目录加入用户 PATH。
-- `cac.cmd` 是 Windows 入口，会自动查找 Git Bash 并委托给主 Bash 脚本。
-- 首次初始化后会生成 `%USERPROFILE%\.cac\bin\claude.cmd`。
-- 如果新开的 CMD / PowerShell 里还找不到 `claude`，重开终端一次；若仍找不到，把 `%USERPROFILE%\.cac\bin` 加入用户 PATH。
-- 只有在你还没执行安装脚本时，才需要临时在仓库根目录下使用 `.\cac.cmd`。
-
-移除本地部署：
+不需要代理时也可以只做身份/配置隔离：
 
 ```powershell
-# 先删除 cac 运行目录、wrapper、环境数据
-cac self delete
-
-# 再移除本地 checkout 安装的全局 shim
-powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1 -Uninstall
-
-# 如需清理仓库依赖
-Remove-Item -Recurse -Force .\node_modules
+cac env create personal
+cac env create work -c 2.1.81
 ```
 
-如果 `cac` 已经不可用，也可以直接手动删除 `%USERPROFILE%\.cac`，再执行 `powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1 -Uninstall`。
+## 常用流程
 
-### 快速上手
+### 查看当前状态
 
-```bash
-# 安装 Claude Code
+```powershell
+cac env ls
+cac env check
+cac env check -d
+cac -v
+```
+
+### 创建和切换环境
+
+```powershell
+# 创建并自动激活环境
+cac env create work
+
+# 创建带代理的环境
+cac env create work-proxy -p 1.2.3.4:1080:u:p
+
+# 创建并绑定指定 Claude Code 版本
+cac env create legacy -c 2.1.81
+
+# 从当前宿主配置复制 .claude 配置
+cac env create cloned --clone
+
+# 切换到某个环境
+cac work
+
+# 查看所有环境
+cac env ls
+```
+
+### 修改环境
+
+```powershell
+# 给当前环境设置或修改代理
+cac env set proxy 1.2.3.4:1080:u:p
+
+# 给指定环境设置代理
+cac env set work proxy 1.2.3.4:1080:u:p
+
+# 移除当前环境代理
+cac env set proxy --remove
+
+# 切换当前环境使用的 Claude Code 版本
+cac env set version 2.1.81
+
+# 删除环境
+cac env rm work
+```
+
+### 管理 Claude Code 版本
+
+```powershell
 cac claude install latest
+cac claude install 2.1.81
+cac claude ls
+cac claude pin 2.1.81
+cac claude uninstall 2.1.81
+```
 
-# 创建环境（自动激活，自动使用最新版）
-cac env create work -p 1.2.3.4:1080:u:p
+### 启动 Claude Code
 
-# 启动 Claude Code（首次需 /login）
+```powershell
+# 确认已经激活目标环境
+cac env check
+
+# 启动；首次进入后执行 /login
 claude
 ```
 
-代理可选 — 不需要代理也能用：
+如果新开的 CMD / PowerShell 里找不到 `claude`，先重开终端；仍然找不到时，把 `%USERPROFILE%\.cac\bin` 加入用户 PATH。
 
-```bash
-cac env create personal                  # 只要身份隔离
-cac env create work -c 2.1.81           # 指定版本，无代理
+## 代理格式
+
+```text
+host:port:user:pass
+host:port
+socks5://u:p@host:port
+http://u:p@host:port
 ```
 
-### 版本管理
+代理不是必填项；不加 `-p` 时，环境仍然会隔离 `.claude` 配置、身份信息和 Claude Code 版本。
 
-```bash
-cac claude install latest               # 安装最新版
-cac claude install 2.1.81               # 安装指定版本
-cac claude ls                           # 列出已安装版本
-cac claude pin 2.1.81                   # 当前环境切换版本
-cac claude uninstall 2.1.81             # 卸载
-```
+## 命令速查
 
-### 环境管理
-
-```bash
-cac env create <name> [-p <proxy>] [-c <version>]   # 创建并自动激活（自动解析最新版）
-cac env ls                              # 列出所有环境
-cac env rm <name>                       # 删除环境
-cac env set [name] proxy <url>          # 设置 / 修改代理
-cac env set [name] proxy --remove       # 移除代理
-cac env set [name] version <ver>        # 切换版本
-cac <name>                              # 激活环境（快捷方式）
-cac ls                                  # = cac env ls
-```
-
-每个环境完全隔离：
-- **Claude Code 版本** — 不同环境可以用不同版本
-- **`.claude` 配置** — sessions、settings、memory 各自独立
-- **身份信息** — UUID、hostname、MAC 等完全不同
-- **代理出口** — 每个环境走不同代理（或不走代理）
-
-### 全部命令
-
-| 命令 | 说明 |
-|:---|:---|
-| **版本管理** | |
-| `cac claude install [latest\|<ver>]` | 安装 Claude Code |
-| `cac claude uninstall <ver>` | 卸载版本 |
-| `cac claude ls` | 列出已安装版本 |
-| `cac claude pin <ver>` | 当前环境绑定版本 |
-| **环境管理** | |
-| `cac env create <name> [-p proxy] [-c ver] [--clone] [--telemetry mode] [--persona preset]` | 创建环境（自动激活，`--telemetry transparent/stealth/paranoid` 控制遥测，`--persona macos-vscode/...` 用于容器） |
-| `cac env ls` | 列出环境 |
+| 命令 | 用途 |
+|:--|:--|
+| `cac env create <name> [-p proxy] [-c version] [--clone]` | 创建并激活环境 |
+| `cac <name>` | 切换到指定环境 |
+| `cac env ls` / `cac ls` | 查看环境列表 |
 | `cac env rm <name>` | 删除环境 |
-| `cac env set [name] <key> <value>` | 修改环境（proxy / version / telemetry / persona） |
-| `cac env check [-d]` | 验证当前环境（`-d` 显示详情） |
-| `cac <name>` | 激活环境 |
-| **自管理** | |
-| `cac self update` | 更新 cac 自身 |
-| `cac self delete` | 卸载 cac |
-| **其他** | |
-| `cac ls` | 列出环境（= `cac env ls`） |
-| `cac check` | 检查当前环境（`cac env check` 的别名） |
-| `cac -v` | 版本号 |
+| `cac env set [name] proxy <proxy>` | 设置环境代理 |
+| `cac env set [name] proxy --remove` | 移除环境代理 |
+| `cac env set [name] version <version>` | 切换环境绑定的 Claude Code 版本 |
+| `cac env check [-d]` / `cac check` | 检查当前环境 |
+| `cac claude install [latest\|<version>]` | 安装 Claude Code 版本 |
+| `cac claude ls` | 查看已安装 Claude Code 版本 |
+| `cac claude pin <version>` | 当前环境绑定指定版本 |
+| `cac claude uninstall <version>` | 卸载指定版本 |
+| `cac self delete` | 删除 cac 运行目录、wrapper 和环境数据 |
+| `cac -v` | 查看 cac 版本 |
 
-### 代理格式
+## 更新本地安装
 
-```
-host:port:user:pass       带认证（自动检测协议）
-host:port                 无认证
-socks5://u:p@host:port    指定协议
-```
-
-### 隐私保护
-
-| 特性 | 实现方式 |
-|:---|:---|
-| 硬件 UUID 隔离 | macOS `ioreg` / Linux `machine-id` / Windows `wmic`+`reg` shim |
-| 主机名 / MAC 隔离 | Shell shim + Node.js `os.hostname()` / `os.networkInterfaces()` hook |
-| Node.js 指纹钩子 | `fingerprint-hook.js` 通过 `NODE_OPTIONS --require` 注入 |
-| 遥测阻断 | DNS guard + 环境变量 + fetch 拦截 + 分级模式（`conservative`/`aggressive`） |
-| 健康检查 bypass | 进程内 Node.js 拦截（无需 /etc/hosts 或 root） |
-| mTLS 客户端证书 | 自签 CA + 每环境独立客户端证书 |
-| `.claude` 配置隔离 | 每个环境独立的 `CLAUDE_CONFIG_DIR` |
-
-### 工作原理
-
-```
-              cac wrapper（进程级，零侵入源代码）
-              ┌──────────────────────────────────────────┐
-  claude ────►│  CLAUDE_CONFIG_DIR → 隔离配置目录          │
-              │  版本解析 → ~/.cac/versions/<ver>/claude   │
-              │  健康检查 bypass（进程内拦截）                │
-              │  12 层遥测环境变量保护                      │──► 代理 ──► Anthropic API
-              │  NODE_OPTIONS: DNS guard + 指纹钩子        │
-              │  PATH: 设备指纹 shim                       │
-              │  mTLS: 客户端证书注入                       │
-              └──────────────────────────────────────────┘
-```
-
-### 文件结构
-
-```
-~/.cac/
-├── versions/<ver>/claude     # Claude Code 二进制文件
-├── bin/claude                # wrapper
-├── shim-bin/                 # ioreg / hostname / ifconfig / cat shim
-├── fingerprint-hook.js       # Node.js 指纹拦截
-├── cac-dns-guard.js          # DNS + fetch 遥测拦截
-├── ca/                       # 自签 CA + 健康检查 bypass 证书
-├── current                   # 当前激活的环境名
-└── envs/<name>/
-    ├── .claude/              # 隔离的 .claude 配置目录
-    │   ├── settings.json     # 环境专属设置
-    │   ├── CLAUDE.md         # 环境专属记忆
-    │   └── statusline-command.sh
-    ├── proxy                 # 代理地址（可选）
-    ├── version               # 绑定的 Claude Code 版本
-    ├── uuid / stable_id      # 隔离身份
-    ├── hostname / mac_address / machine_id
-    └── client_cert.pem       # mTLS 证书
-```
-
-### Docker 容器模式
-
-完全隔离的运行环境：sing-box TUN 网络隔离 + cac 身份伪装，预装 Claude Code。
-
-```bash
-cac docker setup     # 粘贴代理地址，网络自动检测
-cac docker start     # 启动容器
-cac docker enter     # 进入容器，claude + cac 直接可用
-cac docker check     # 网络 + 身份一键诊断
-cac docker port 6287 # 端口转发
-```
-
-代理格式：`ip:port:user:pass`（SOCKS5）、`ss://...`、`vmess://...`、`vless://...`、`trojan://...`
-
----
-
-<a id="english"></a>
-
-## English
-
-> **[切换到中文](#中文)**
-
-### Overview
-
-**cac** — Isolate, protect, and manage your Claude Code:
-
-- **Version management** — install, switch, rollback Claude Code versions
-- **Environment isolation** — independent `.claude` config + identity + proxy per environment
-- **Privacy protection** — device fingerprint spoofing + telemetry modes (`conservative`/`aggressive`) + mTLS
-- **Config inheritance** — `--clone` inherits config from host or other envs, `~/.cac/settings.json` for global preferences
-- **Zero config** — no setup needed, auto-initializes on first use
-
-### Notes
-
-> **Account ban notice**: cac provides device fingerprint layer protection (UUID, hostname, MAC, telemetry blocking, config isolation), but **cannot affect account-layer risks** — including your OAuth account, payment method fingerprint, IP reputation score, or Anthropic's server-side ban decisions. Account bans are an account-layer issue that cac does not address. See the [Ban Risk FAQ](https://cac.nextmind.space/docs/guides/ban-risk) for details.
-
-> **Proxy tool conflicts**: If you have Clash, Shadowrocket, Surge, sing-box or other proxy/VPN tools running locally, turn them off before using cac. TUN-mode compatibility is still experimental. Even if a conflict occurs, cac will fail-closed — **your real IP is never exposed**.
-
-- **First login**: Run `claude`, then type `/login`. Health check is automatically bypassed.
-- **Verify your setup**: Run `cac env check` anytime. Use `which claude` to confirm you're using the cac-managed wrapper.
-- **Automatic safety checks**: Every new Claude Code session runs a quick cac check. If anything is wrong, the session is terminated before any data is sent.
-- **Network resilience**: Traffic is strictly routed through your proxy. If the proxy drops, traffic stops entirely — no fallback to direct connection. Built-in heartbeat detection and auto-recovery — no manual restart needed after disconnections.
-- **IPv6**: Recommend disabling system-wide to prevent real address exposure.
-
-### Install
-
-```bash
-# npm (recommended)
-npm install -g claude-cac
-
-# or manual
-curl -fsSL https://raw.githubusercontent.com/nmhjklnm/cac/master/install.sh | bash
-```
-
-### Windows local deployment (current branch)
-
-> Windows support is implemented in this branch, but if you are testing changes before the next release, use a **local checkout** instead of waiting for npm/cloud rollout.
-
-Prerequisites:
-- Windows 10/11
-- Git for Windows with Git Bash
-- Node.js 18+
+pull 新代码或移动仓库目录后，重新生成本地 shim：
 
 ```powershell
-git clone https://github.com/nmhjklnm/cac.git
-cd cac
-npm install
 powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1
-
-# verify entrypoints from CMD or PowerShell
-cac -v
-cac help
 ```
 
-If `cac` is still not found, check your npm global bin directory:
+本地 shim 会记录当前 checkout 路径；仓库位置变化后必须重新执行一次。
+
+## 卸载
 
 ```powershell
-npm prefix -g
-```
-
-It is usually `%APPDATA%\npm`. The installer script tries to add it to your user PATH automatically; if it still is not available, add it manually and reopen the terminal.
-
-For the first run:
-
-```powershell
-# install Claude Code binary
-cac claude install latest
-
-# create a Windows environment (with or without proxy)
-cac env create win-work -p 1.2.3.4:1080:u:p
-cac env check
-
-# start Claude Code (first time: /login)
-claude
-```
-
-Notes:
-- `scripts/install-local-win.ps1` creates `cac`, `cac.cmd`, and `cac.ps1` shims in `%APPDATA%\npm` and tries to add that directory to your user PATH.
-- `cac.cmd` is the Windows entrypoint. It locates Git Bash and delegates to the main Bash implementation.
-- First initialization generates `%USERPROFILE%\.cac\bin\claude.cmd`.
-- If `claude` is not available in a new CMD/PowerShell window, reopen the terminal once; if it still is not found, add `%USERPROFILE%\.cac\bin` to your user PATH.
-- Only fall back to `.\cac.cmd` from the repo root before running the installer script.
-
-Remove the local deployment:
-
-```powershell
-# remove cac runtime data, wrappers, and environments first
+# 删除 cac 运行目录、wrapper 和环境数据
 cac self delete
 
-# remove the global shims created for the local checkout
+# 删除 install-local-win.ps1 创建的全局 shim
 powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1 -Uninstall
-
-# optional: clean repository dependencies
-Remove-Item -Recurse -Force .\node_modules
 ```
 
-If `cac` is already unavailable, you can delete `%USERPROFILE%\.cac` manually and then run `powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1 -Uninstall`.
+如果 `cac` 已经不可用，可以手动删除 `%USERPROFILE%\.cac`，再从仓库根目录执行上面的 `-Uninstall` 命令。
 
-### Quick start
+## Windows 注意事项
 
-```bash
-# Install Claude Code
-cac claude install latest
+- `cac.cmd` 和 `cac.ps1` 需要能找到 Git Bash；如果启动失败，先确认 Git for Windows 安装完整。
+- Docker 模式需要原生 Linux；Windows 用户优先使用 `cac env`，确实需要 Docker 隔离时再考虑 WSL2。
+- 如果代理不处理 IPv6，建议在系统或网卡层面关闭 IPv6，避免真实 IPv6 出口泄露。
 
-# Create environment (auto-activates, auto-resolves latest version)
-cac env create work -p 1.2.3.4:1080:u:p
+## 更多文档
 
-# Run Claude Code (first time: /login)
-claude
-```
-
-Proxy is optional:
-
-```bash
-cac env create personal                  # identity isolation only
-cac env create work -c 2.1.81           # pinned version, no proxy
-```
-
-### Version management
-
-```bash
-cac claude install latest               # install latest
-cac claude install 2.1.81               # install specific version
-cac claude ls                           # list installed versions
-cac claude pin 2.1.81                   # pin current env to version
-cac claude uninstall 2.1.81             # remove
-```
-
-### Environment management
-
-```bash
-cac env create <name> [-p <proxy>] [-c <version>]   # create and auto-activate (auto-resolves latest)
-cac env ls                              # list all environments
-cac env rm <name>                       # remove environment
-cac env set [name] proxy <url>          # set / change proxy
-cac env set [name] proxy --remove       # remove proxy
-cac env set [name] version <ver>        # change version
-cac <name>                              # activate (shortcut)
-cac ls                                  # = cac env ls
-```
-
-Each environment is fully isolated:
-- **Claude Code version** — different envs can use different versions
-- **`.claude` config** — sessions, settings, memory are independent
-- **Identity** — UUID, hostname, MAC are all different
-- **Proxy** — each env routes through a different proxy (or none)
-
-### All commands
-
-| Command | Description |
-|:---|:---|
-| **Version management** | |
-| `cac claude install [latest\|<ver>]` | Install Claude Code |
-| `cac claude uninstall <ver>` | Remove version |
-| `cac claude ls` | List installed versions |
-| `cac claude pin <ver>` | Pin current env to version |
-| **Environment management** | |
-| `cac env create <name> [-p proxy] [-c ver] [--clone] [--telemetry mode] [--persona preset]` | Create environment (auto-activates, `--telemetry transparent/stealth/paranoid` for telemetry control, `--persona macos-vscode/...` for containers) |
-| `cac env ls` | List environments |
-| `cac env rm <name>` | Remove environment |
-| `cac env set [name] <key> <value>` | Modify environment (proxy / version / telemetry / persona) |
-| `cac env check [-d]` | Verify current environment (`-d` for details) |
-| `cac <name>` | Activate environment |
-| **Self-management** | |
-| `cac self update` | Update cac itself |
-| `cac self delete` | Uninstall cac |
-| **Other** | |
-| `cac ls` | List environments (= `cac env ls`) |
-| `cac check` | Verify environment (alias for `cac env check`) |
-| `cac -v` | Show version |
-
-### Privacy protection
-
-| Feature | How |
-|:---|:---|
-| Hardware UUID isolation | macOS `ioreg` / Linux `machine-id` / Windows `wmic`+`reg` shim |
-| Hostname / MAC isolation | Shell shim + Node.js `os.hostname()` / `os.networkInterfaces()` hook |
-| Node.js fingerprint hook | `fingerprint-hook.js` via `NODE_OPTIONS --require` |
-| Telemetry blocking | DNS guard + env vars + fetch interception + modes (`conservative`/`aggressive`) |
-| Health check bypass | In-process Node.js interception (no `/etc/hosts`, no root) |
-| mTLS client certificates | Self-signed CA + per-profile client certs |
-| `.claude` config isolation | Per-environment `CLAUDE_CONFIG_DIR` |
-
-### How it works
-
-```
-              cac wrapper (process-level, zero source invasion)
-              ┌──────────────────────────────────────────┐
-  claude ────►│  CLAUDE_CONFIG_DIR → isolated config dir   │
-              │  Version resolve → ~/.cac/versions/<ver>   │
-              │  Health check bypass (in-process intercept) │
-              │  Env vars: 12-layer telemetry kill         │──► Proxy ──► Anthropic API
-              │  NODE_OPTIONS: DNS guard + fingerprint     │
-              │  PATH: device fingerprint shims            │
-              │  mTLS: client cert injection               │
-              └──────────────────────────────────────────┘
-```
-
-### File layout
-
-```
-~/.cac/
-├── versions/<ver>/claude     # Claude Code binaries
-├── bin/claude                # wrapper
-├── shim-bin/                 # ioreg / hostname / ifconfig / cat shims
-├── fingerprint-hook.js       # Node.js fingerprint interception
-├── cac-dns-guard.js          # DNS + fetch telemetry interception
-├── ca/                       # self-signed CA + health bypass cert
-├── current                   # active environment name
-└── envs/<name>/
-    ├── .claude/              # isolated .claude config directory
-    │   ├── settings.json     # env-specific settings
-    │   ├── CLAUDE.md         # env-specific memory
-    │   └── statusline-command.sh
-    ├── proxy                 # proxy URL (optional)
-    ├── version               # pinned Claude Code version
-    ├── uuid / stable_id      # isolated identity
-    ├── hostname / mac_address / machine_id
-    └── client_cert.pem       # mTLS cert
-```
-
-### Docker mode
-
-Fully isolated environment: sing-box TUN network isolation + cac identity protection, with Claude Code pre-installed.
-
-```bash
-cac docker setup     # paste proxy, network auto-detected
-cac docker start     # start container
-cac docker enter     # shell with claude + cac ready
-cac docker check     # network + identity diagnostics
-cac docker port 6287 # port forwarding
-```
-
-Proxy formats: `ip:port:user:pass` (SOCKS5), `ss://...`, `vmess://...`, `vless://...`, `trojan://...`
-
----
-
-<div align="center">
-
-MIT License
-
-</div>
+- [完整 README 归档](docs/original-readme.md)
+- [Windows 排障](docs/windows/troubleshooting.md)
+- [Windows 测试指南](docs/windows/testing-guide.md)
+- [Windows 支持评估](docs/windows/windows-support-assessment.md)
+- [上游文档站](https://cac.nextmind.space/docs)
