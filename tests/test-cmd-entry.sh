@@ -68,6 +68,7 @@ grep -q 'claude.cmd' "$PROJECT_DIR/src/templates.sh" && pass "templates.sh 包�
 grep -q '@echo off' "$PROJECT_DIR/src/templates.sh" && pass "包含 @echo off" || fail "缺 @echo off"
 grep -q 'where.exe git.exe' "$PROJECT_DIR/src/templates.sh" && pass "模板支持通过 git.exe 定位 Git Bash" || fail "模板缺 git.exe 定位逻辑"
 grep -q 'WindowsApps' "$PROJECT_DIR/src/templates.sh" && pass "模板会跳过 WindowsApps bash stub" || fail "模板缺 WindowsApps 过滤"
+grep -q 'CLAUDE_CODE_GIT_BASH_PATH=%BASH_EXE%' "$PROJECT_DIR/src/templates.sh" && pass "模板传递 Git Bash 路径给 Claude" || fail "模板未设置 CLAUDE_CODE_GIT_BASH_PATH"
 grep -q '"%BASH_EXE%" "%SCRIPT_DIR%\\claude"' "$PROJECT_DIR/src/templates.sh" && pass "调用解析后的 bash wrapper" || fail "claude.cmd 未调用解析后的 bash"
 
 # ── E05: PATH 管理 ──

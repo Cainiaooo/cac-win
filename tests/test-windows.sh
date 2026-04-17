@@ -125,6 +125,7 @@ if is_windows; then
     [[ -f "$PROJECT_DIR/cac.cmd" ]] && pass "cac.cmd 存在" || fail "cac.cmd 缺失"
     grep -q 'bash' "$PROJECT_DIR/cac.cmd" && pass "cac.cmd 调用 bash" || fail "cac.cmd 未调用 bash"
     grep -q 'claude.cmd' "$PROJECT_DIR/src/templates.sh" && pass "templates.sh 生成 claude.cmd" || fail "未生成 claude.cmd"
+    grep -q 'CLAUDE_CODE_GIT_BASH_PATH' "$PROJECT_DIR/src/templates.sh" && pass "claude wrapper 设置 Git Bash 路径" || fail "未设置 CLAUDE_CODE_GIT_BASH_PATH"
 else
     skip "Windows 专项（.cmd 入口文件）"
 fi

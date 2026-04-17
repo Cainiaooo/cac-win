@@ -193,6 +193,52 @@ _count_claude_processes() {
     esac
 }
 
+_ensure_claude_git_bash_path() {
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) ;;
+        *) return 0 ;;
+    esac
+
+    if [[ -n "${CLAUDE_CODE_GIT_BASH_PATH:-}" ]]; then
+        local existing
+        existing="$(cygpath -u "$CLAUDE_CODE_GIT_BASH_PATH" 2>/dev/null || printf '%s\n' "$CLAUDE_CODE_GIT_BASH_PATH")"
+        [[ -f "$existing" ]] && return 0
+    fi
+
+    local candidate
+    for candidate in \
+        "${ProgramFiles:-}/Git/bin/bash.exe" \
+        "${ProgramW6432:-}/Git/bin/bash.exe" \
+        "${LocalAppData:-}/Programs/Git/bin/bash.exe" \
+        "${LocalAppData:-}/Git/bin/bash.exe"
+    do
+        [[ -n "$candidate" && -f "$candidate" ]] || continue
+        export CLAUDE_CODE_GIT_BASH_PATH="$(_native_path "$candidate")"
+        return 0
+    done
+
+    while IFS= read -r candidate; do
+        [[ -n "$candidate" ]] || continue
+        candidate="$(cygpath -u "$candidate" 2>/dev/null || printf '%s\n' "$candidate")"
+        candidate="$(dirname "$candidate")/../bin/bash.exe"
+        candidate="$(cd "$(dirname "$candidate")" 2>/dev/null && pwd)/$(basename "$candidate")"
+        [[ -f "$candidate" ]] || continue
+        export CLAUDE_CODE_GIT_BASH_PATH="$(_native_path "$candidate")"
+        return 0
+    done < <(cmd.exe /c "where git.exe" 2>/dev/null | tr -d '\r')
+
+    while IFS= read -r candidate; do
+        [[ -n "$candidate" ]] || continue
+        [[ "$candidate" == *"\\WindowsApps\\"* ]] && continue
+        candidate="$(cygpath -u "$candidate" 2>/dev/null || printf '%s\n' "$candidate")"
+        [[ -f "$candidate" ]] || continue
+        export CLAUDE_CODE_GIT_BASH_PATH="$(_native_path "$candidate")"
+        return 0
+    done < <(cmd.exe /c "where bash.exe" 2>/dev/null | tr -d '\r')
+}
+
+_ensure_claude_git_bash_path
+
 # cacstop state: passthrough directly
 if [[ -f "$CAC_DIR/stopped" ]]; then
     _real=$(tr -d '[:space:]' < "$CAC_DIR/real_claude" 2>/dev/null || true)
@@ -596,6 +642,8 @@ if not defined BASH_EXE (
   >&2 echo [cac] Error: Git Bash not found. Install Git for Windows or add bash.exe to PATH.
   exit /b 9009
 )
+if defined CLAUDE_CODE_GIT_BASH_PATH if not exist "%CLAUDE_CODE_GIT_BASH_PATH%" set "CLAUDE_CODE_GIT_BASH_PATH="
+if not defined CLAUDE_CODE_GIT_BASH_PATH set "CLAUDE_CODE_GIT_BASH_PATH=%BASH_EXE%"
 "%BASH_EXE%" "%SCRIPT_DIR%\claude" %*
 exit /b %ERRORLEVEL%
 CMDEOF
