@@ -1,10 +1,6 @@
-<div align="center">
+# cac-win
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/logo-light.svg">
-  <img alt="cac" src="docs/images/logo-light.svg" width="200">
-</picture>
+这是面向 **Windows 本地使用** 的 cac 适配仓库。
 
 **Claude Code 小雨衣 · Windows 版** — Windows 适配 fork
 
@@ -16,9 +12,12 @@
 
 > 本仓库是 [nmhjklnm/cac](https://github.com/nmhjklnm/cac) 的 Windows 适配 fork，专注于 Windows 平台兼容性。**未发布到 npm**，请通过 clone 仓库的方式安装。macOS / Linux 用户请直接使用 [上游仓库](https://github.com/nmhjklnm/cac)。
 
-</div>
+## 前置要求
 
----
+- Windows 10/11
+- Git for Windows，必须包含 Git Bash
+- Node.js 18+，并确保 npm 在 PATH 中
+- PowerShell 5.1+
 
 <a id="中文"></a>
 
@@ -70,20 +69,156 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1
 ### 首次使用
 
 ```powershell
-# 安装 Claude Code 二进制
+cac -v
+cac help
+```
+
+```powershell
+# 安装 cac 托管的 Claude Code 二进制
 cac claude install latest
 
-# 创建环境（代理可选）
-cac env create work -p 1.2.3.4:1080:u:p
+# 创建并激活 Windows 环境；代理可按需填写
+cac env create win-work -p 1.2.3.4:1080:u:p
 
-# 验证隐私保护状态
+# 检查当前环境
 cac env check
 
-# 启动 Claude Code（首次需输入 /login 完成授权）
+# 启动 Claude Code；首次进入后使用 /login
 claude
 ```
 
 首次初始化后会自动生成 `%USERPROFILE%\.cac\bin\claude.cmd`。如果新终端里找不到 `claude`，把 `%USERPROFILE%\.cac\bin` 加入用户 PATH 后重开终端。
+
+不需要代理时也可以只做身份/配置隔离：
+
+```powershell
+cac env create personal
+cac env create work -c 2.1.81
+```
+
+### 常用流程
+
+#### 查看当前状态
+
+```powershell
+cac env ls
+cac env check
+cac env check -d
+cac -v
+```
+
+#### 创建和切换环境
+
+```powershell
+# 创建并自动激活环境
+cac env create work
+
+# 创建带代理的环境
+cac env create work-proxy -p 1.2.3.4:1080:u:p
+
+# 创建并绑定指定 Claude Code 版本
+cac env create legacy -c 2.1.81
+
+# 创建环境，并在每次激活时检查 Claude Code 更新
+cac env create work-auto --autoupdate
+
+# 从当前宿主配置复制 .claude 配置
+cac env create cloned --clone
+
+# 切换到某个环境
+cac work
+
+# 查看所有环境
+cac env ls
+```
+
+#### 修改环境
+
+```powershell
+# 给当前环境设置或修改代理
+cac env set proxy 1.2.3.4:1080:u:p
+
+# 给指定环境设置代理
+cac env set work proxy 1.2.3.4:1080:u:p
+
+# 移除当前环境代理
+cac env set proxy --remove
+
+# 切换当前环境使用的 Claude Code 版本
+cac env set version 2.1.81
+
+# 开启或关闭激活时的 Claude Code 更新检查
+cac env set work autoupdate on
+cac env set work autoupdate off
+
+# 删除环境
+cac env rm work
+```
+
+#### 管理 Claude Code 版本
+
+```powershell
+cac claude install latest
+cac claude install 2.1.81
+cac claude ls
+cac claude pin 2.1.81
+cac claude update work
+cac claude prune
+cac claude prune --yes
+cac claude uninstall 2.1.81
+```
+
+#### 启动 Claude Code
+
+```powershell
+# 确认已经激活目标环境
+cac env check
+
+# 启动；首次进入后执行 /login
+claude
+```
+
+代理可选：
+
+```text
+host:port:user:pass
+host:port
+socks5://u:p@host:port
+http://u:p@host:port
+```
+
+代理不是必填项；不加 `-p` 时，环境仍然会隔离 `.claude` 配置、身份信息和 Claude Code 版本。
+
+### 全部命令
+
+| 命令 | 说明 |
+|:---|:---|
+| `cac env create <name> [-p proxy] [-c ver] [--clone] [--autoupdate]` | 创建并激活环境 |
+| `cac <name>` | 激活环境（快捷方式） |
+| `cac env ls` / `cac ls` | 查看环境列表 |
+| `cac env rm <name>` | 删除环境 |
+| `cac env set [name] proxy <proxy>` | 设置环境代理 |
+| `cac env set [name] proxy --remove` | 移除环境代理 |
+| `cac env set [name] version <ver>` | 切换环境绑定的 Claude Code 版本 |
+| `cac env set [name] autoupdate <on\|off>` | 开启或关闭激活时的 Claude Code 更新检查 |
+| `cac env check [-d]` | 验证当前环境（`-d` 显示详情） |
+| `cac claude install [latest\|<ver>]` | 安装 Claude Code |
+| `cac claude uninstall <ver>` | 卸载版本 |
+| `cac claude ls` | 列出已安装版本 |
+| `cac claude pin <ver>` | 当前环境绑定版本 |
+| `cac claude update [env]` | 将环境更新到远端最新 Claude Code |
+| `cac claude prune [--yes]` | 列出或删除未被环境引用的 Claude Code 版本 |
+| `cac self update` | 更新 cac 自身 |
+| `cac self delete` | 卸载 cac |
+| `cac -v` | 版本号 |
+
+### 代理格式
+
+```
+host:port:user:pass       带认证（自动检测协议）
+host:port                 无认证
+socks5://u:p@host:port    指定协议
+```
 
 ### 同步更新
 
@@ -133,77 +268,6 @@ cd .. && Remove-Item -Recurse -Force cac-win
 完整的 Windows 支持评估和已知问题见 [`docs/windows/`](docs/windows/)。
 
 ---
-
-### 快速上手
-
-```bash
-# 安装 Claude Code
-cac claude install latest
-
-# 创建环境（自动激活，自动使用最新版）
-cac env create work -p 1.2.3.4:1080:u:p
-
-# 启动 Claude Code（首次需 /login）
-claude
-```
-
-代理可选：
-
-```bash
-cac env create personal                  # 只要身份隔离
-cac env create work -c 2.1.81           # 指定版本，无代理
-```
-
-### 版本管理
-
-```bash
-cac claude install latest               # 安装最新版
-cac claude install 2.1.81               # 安装指定版本
-cac claude ls                           # 列出已安装版本
-cac claude pin 2.1.81                   # 当前环境绑定版本
-cac claude uninstall 2.1.81             # 卸载
-```
-
-### 环境管理
-
-```bash
-cac env create <name> [-p <proxy>] [-c <version>]   # 创建并自动激活
-cac env ls                              # 列出所有环境
-cac env rm <name>                       # 删除环境
-cac env set [name] proxy <url>          # 设置 / 修改代理
-cac env set [name] proxy --remove       # 移除代理
-cac env set [name] version <ver>        # 切换版本
-cac <name>                              # 激活环境（快捷方式）
-cac ls                                  # = cac env ls
-```
-
-每个环境完全隔离：独立的 Claude Code 版本、`.claude` 配置、身份信息（UUID / hostname / MAC）和代理出口。
-
-### 全部命令
-
-| 命令 | 说明 |
-|:---|:---|
-| `cac claude install [latest\|<ver>]` | 安装 Claude Code |
-| `cac claude uninstall <ver>` | 卸载版本 |
-| `cac claude ls` | 列出已安装版本 |
-| `cac claude pin <ver>` | 当前环境绑定版本 |
-| `cac env create <name> [-p proxy] [-c ver]` | 创建环境 |
-| `cac env ls` | 列出环境 |
-| `cac env rm <name>` | 删除环境 |
-| `cac env set [name] <key> <value>` | 修改环境（proxy / version / telemetry） |
-| `cac env check [-d]` | 验证当前环境（`-d` 显示详情） |
-| `cac <name>` | 激活环境 |
-| `cac self update` | 更新 cac 自身 |
-| `cac self delete` | 卸载 cac |
-| `cac -v` | 版本号 |
-
-### 代理格式
-
-```
-host:port:user:pass       带认证（自动检测协议）
-host:port                 无认证
-socks5://u:p@host:port    指定协议
-```
 
 ### 隐私保护
 
@@ -283,6 +347,11 @@ The installer creates `cac` / `cac.cmd` / `cac.ps1` shims in the npm global dire
 ### First run
 
 ```powershell
+cac -v
+cac help
+```
+
+```powershell
 # Install Claude Code binary
 cac claude install latest
 
@@ -297,6 +366,126 @@ claude
 ```
 
 First initialization auto-generates `%USERPROFILE%\.cac\bin\claude.cmd`. If `claude` is not found in a new terminal, add `%USERPROFILE%\.cac\bin` to your user PATH and reopen.
+
+Proxy is optional:
+
+```powershell
+cac env create personal                  # identity isolation only
+cac env create work -c 2.1.81           # pinned version, no proxy
+```
+
+### Common workflows
+
+#### Check current status
+
+```powershell
+cac env ls
+cac env check
+cac env check -d
+cac -v
+```
+
+#### Create and switch environments
+
+```powershell
+# Create and auto-activate
+cac env create work
+
+# With proxy
+cac env create work-proxy -p 1.2.3.4:1080:u:p
+
+# With pinned Claude Code version
+cac env create legacy -c 2.1.81
+
+# Auto-update Claude Code on each activation
+cac env create work-auto --autoupdate
+
+# Clone current .claude config
+cac env create cloned --clone
+
+# Switch environment
+cac work
+
+# List environments
+cac env ls
+```
+
+#### Modify environments
+
+```powershell
+# Set or change proxy
+cac env set proxy 1.2.3.4:1080:u:p
+
+# Set proxy for a specific environment
+cac env set work proxy 1.2.3.4:1080:u:p
+
+# Remove proxy
+cac env set proxy --remove
+
+# Change Claude Code version
+cac env set version 2.1.81
+
+# Enable or disable auto-update on activation
+cac env set work autoupdate on
+cac env set work autoupdate off
+
+# Remove environment
+cac env rm work
+```
+
+#### Manage Claude Code versions
+
+```powershell
+cac claude install latest
+cac claude install 2.1.81
+cac claude ls
+cac claude pin 2.1.81
+cac claude update work
+cac claude prune
+cac claude prune --yes
+cac claude uninstall 2.1.81
+```
+
+#### Start Claude Code
+
+```powershell
+# Verify active environment
+cac env check
+
+# Start (first time: type /login to authorize)
+claude
+```
+
+### All commands
+
+| Command | Description |
+|:---|:---|
+| `cac env create <name> [-p proxy] [-c ver] [--clone] [--autoupdate]` | Create and activate environment |
+| `cac <name>` | Activate environment (shortcut) |
+| `cac env ls` / `cac ls` | List environments |
+| `cac env rm <name>` | Remove environment |
+| `cac env set [name] proxy <proxy>` | Set environment proxy |
+| `cac env set [name] proxy --remove` | Remove environment proxy |
+| `cac env set [name] version <ver>` | Change Claude Code version |
+| `cac env set [name] autoupdate <on\|off>` | Enable or disable auto-update on activation |
+| `cac env check [-d]` | Verify current environment (`-d` for details) |
+| `cac claude install [latest\|<ver>]` | Install Claude Code |
+| `cac claude uninstall <ver>` | Remove version |
+| `cac claude ls` | List installed versions |
+| `cac claude pin <ver>` | Pin current env to version |
+| `cac claude update [env]` | Update environment to latest Claude Code |
+| `cac claude prune [--yes]` | List or remove unreferenced Claude Code versions |
+| `cac self update` | Update cac itself |
+| `cac self delete` | Uninstall cac |
+| `cac -v` | Show version |
+
+### Proxy format
+
+```
+host:port:user:pass       authenticated (protocol auto-detected)
+host:port                 no auth
+socks5://u:p@host:port    explicit protocol
+```
 
 ### Keeping up to date
 
@@ -347,72 +536,6 @@ See [`docs/windows/`](docs/windows/) for the full Windows support assessment and
 
 ---
 
-### Quick start
-
-```bash
-cac claude install latest
-cac env create work -p 1.2.3.4:1080:u:p
-claude
-```
-
-Proxy is optional:
-
-```bash
-cac env create personal                  # identity isolation only
-cac env create work -c 2.1.81           # pinned version, no proxy
-```
-
-### Version management
-
-```bash
-cac claude install latest               # install latest
-cac claude install 2.1.81               # install specific version
-cac claude ls                           # list installed versions
-cac claude pin 2.1.81                   # pin current env to version
-cac claude uninstall 2.1.81             # remove
-```
-
-### Environment management
-
-```bash
-cac env create <name> [-p <proxy>] [-c <version>]   # create and auto-activate
-cac env ls                              # list all environments
-cac env rm <name>                       # remove environment
-cac env set [name] proxy <url>          # set / change proxy
-cac env set [name] proxy --remove       # remove proxy
-cac env set [name] version <ver>        # change version
-cac <name>                              # activate (shortcut)
-cac ls                                  # = cac env ls
-```
-
-Each environment is fully isolated: Claude Code version, `.claude` config, identity (UUID / hostname / MAC), and proxy.
-
-### All commands
-
-| Command | Description |
-|:---|:---|
-| `cac claude install [latest\|<ver>]` | Install Claude Code |
-| `cac claude uninstall <ver>` | Remove version |
-| `cac claude ls` | List installed versions |
-| `cac claude pin <ver>` | Pin current env to version |
-| `cac env create <name> [-p proxy] [-c ver]` | Create environment |
-| `cac env ls` | List environments |
-| `cac env rm <name>` | Remove environment |
-| `cac env set [name] <key> <value>` | Modify environment (proxy / version / telemetry) |
-| `cac env check [-d]` | Verify current environment (`-d` for details) |
-| `cac <name>` | Activate environment |
-| `cac self update` | Update cac itself |
-| `cac self delete` | Uninstall cac |
-| `cac -v` | Show version |
-
-### Proxy format
-
-```
-host:port:user:pass       authenticated (protocol auto-detected)
-host:port                 no auth
-socks5://u:p@host:port    explicit protocol
-```
-
 ### Privacy protection
 
 | Feature | How |
@@ -439,6 +562,18 @@ socks5://u:p@host:port    explicit protocol
               │  mTLS: client cert injection               │
               └──────────────────────────────────────────┘
 ```
+
+---
+
+## 更多文档
+
+- [完整 README 归档](docs/original-readme.md)
+- [Windows 排障](docs/windows/troubleshooting.md)
+- [Windows 测试指南](docs/windows/testing-guide.md)
+- [Windows 已知问题](docs/windows/known-issues.md)
+- [Windows IPv6 测试指南](docs/windows/ipv6-test-guide.md)
+- [Windows 支持评估](docs/windows/windows-support-assessment.md)
+- [上游文档站](https://cac.nextmind.space/docs)
 
 ---
 
