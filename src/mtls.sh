@@ -19,6 +19,8 @@ _openssl() {
                     break
                 fi
             done
+            # Prevent MSYS2 from converting -subj "/CN=..." to Windows paths
+            export MSYS_NO_PATHCONV=1
             ;;
     esac
     "$openssl_bin" "$@"
