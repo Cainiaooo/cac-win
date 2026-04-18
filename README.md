@@ -244,6 +244,29 @@ cac env ls
 
 > **如何判断是否需要同步 JS 文件？** 查看 `git log` 或 `git diff HEAD~1`，如果只改了 `src/*.sh` 则不需要；如果改了 `src/fingerprint-hook.js`、`src/relay.js` 或 `src/dns_block.sh` 则需要同步。
 
+### 已安装用户如何更新
+
+如果之前已经安装过 cac 并创建了环境，更新流程如下：
+
+```bash
+# 1. 进入仓库目录，拉取最新代码
+cd E:\Projects\cac-win
+git pull
+
+# 2. 重新构建（必须在 Git Bash 中运行）
+bash build.sh
+
+# 3. 同步 JS 运行时文件（如果本次更新涉及 JS 文件修改）
+cp fingerprint-hook.js relay.js cac-dns-guard.js ~/.cac/
+```
+
+**常见问题**：
+
+- **新命令/新选项不可用**（如 `--autoupdate` 提示 `unknown option`）：说明本地 `cac` 构建产物未更新。确认已执行 `bash build.sh`，然后重试。
+- **已有环境不受影响**：更新只替换 cac 程序本身，`~/.cac/envs/` 下的环境数据、身份信息、代理配置都会保留。
+- **不需要重新运行安装脚本**：shim 指向本地 checkout 路径，`build.sh` 更新后立即生效。
+- **不需要重新创建环境**：已有的环境和配置全部兼容。
+
 ### 卸载
 
 ```powershell
@@ -510,6 +533,29 @@ cac env ls
 ```
 
 > **Do I need to sync JS files?** Check `git log` or `git diff HEAD~1` — if only `src/*.sh` changed, no sync needed. If `src/fingerprint-hook.js`, `src/relay.js`, or `src/dns_block.sh` changed, sync is required.
+
+### Updating an existing installation
+
+If you already have cac installed with environments set up, the update process is:
+
+```bash
+# 1. Navigate to the repo and pull latest
+cd E:\Projects\cac-win
+git pull
+
+# 2. Rebuild (must run from Git Bash)
+bash build.sh
+
+# 3. Sync JS runtime files (only if this update changed JS files)
+cp fingerprint-hook.js relay.js cac-dns-guard.js ~/.cac/
+```
+
+**Common issues**:
+
+- **New commands/options not available** (e.g. `--autoupdate` shows `unknown option`): the local `cac` build is stale. Confirm `bash build.sh` was run, then retry.
+- **Existing environments are preserved**: updating only replaces the cac program itself. Environment data, identities, and proxy configs under `~/.cac/envs/` are kept intact.
+- **No need to re-run the installer**: shims point to your local checkout path, so `build.sh` updates take effect immediately.
+- **No need to recreate environments**: existing environments and configs are fully compatible.
 
 ### Uninstall
 
