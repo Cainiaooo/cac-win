@@ -218,11 +218,15 @@ cac env ls
 
 如果之前已经安装过 cac 并创建了环境，更新流程如下：
 
-```bash
+```powershell
 # 1. 进入仓库目录，拉取最新代码
 cd E:\Projects\cac-win
 git pull
+```
 
+然后在 **Git Bash** 中执行：
+
+```bash
 # 2. 重新构建（必须在 Git Bash 中运行）
 bash build.sh
 
@@ -230,12 +234,23 @@ bash build.sh
 cp fingerprint-hook.js relay.js cac-dns-guard.js ~/.cac/
 ```
 
+最后重新激活环境，触发自动修复（如 mTLS 证书补全等）：
+
+```powershell
+# 4. 重新激活环境（会自动补全缺失的证书等）
+cac <你的环境名>
+
+# 5. 验证
+cac env check -d
+```
+
+**不需要**删除任何已有文件、重新运行安装脚本或重新创建环境。已有的环境数据、身份信息、代理配置都会保留。
+
 **常见问题**：
 
-- **新命令/新选项不可用**（如 `--autoupdate` 提示 `unknown option`）：说明本地 `cac` 构建产物未更新。确认已执行 `bash build.sh`，然后重试。
-- **已有环境不受影响**：更新只替换 cac 程序本身，`~/.cac/envs/` 下的环境数据、身份信息、代理配置都会保留。
-- **不需要重新运行安装脚本**：shim 指向本地 checkout 路径，`build.sh` 更新后立即生效。
-- **不需要重新创建环境**：已有的环境和配置全部兼容。
+- **新命令/新选项不可用**（如 `--autoupdate` 提示 `unknown option`）：说明 `bash build.sh` 未执行或未成功，确认在 Git Bash 中重新运行。
+- **mTLS 显示 `client cert not found`**：旧版本在 Windows 上因 OpenSSL 兼容问题未能生成证书。更新代码并 `bash build.sh` 后，重新激活环境即可自动补全（`cac <环境名>`）。
+- **`bash build.sh` 报 WSL 错误**：系统把 `bash` 解析到了 WSL 而非 Git Bash。请直接在开始菜单打开 **Git Bash** 终端再执行命令。
 
 ### 卸载
 
@@ -353,11 +368,15 @@ cac env ls
 
 If you already have cac installed with environments set up, the update process is:
 
-```bash
+```powershell
 # 1. Navigate to the repo and pull latest
 cd E:\Projects\cac-win
 git pull
+```
 
+Then from **Git Bash**:
+
+```bash
 # 2. Rebuild (must run from Git Bash)
 bash build.sh
 
@@ -365,12 +384,23 @@ bash build.sh
 cp fingerprint-hook.js relay.js cac-dns-guard.js ~/.cac/
 ```
 
+Finally, reactivate your environment to trigger auto-repair (e.g. mTLS cert backfill):
+
+```powershell
+# 4. Reactivate environment (auto-generates missing certs etc.)
+cac <your-env-name>
+
+# 5. Verify
+cac env check -d
+```
+
+**No need** to delete any files, re-run the installer, or recreate environments. Existing environment data, identities, and proxy configs are preserved.
+
 **Common issues**:
 
-- **New commands/options not available** (e.g. `--autoupdate` shows `unknown option`): the local `cac` build is stale. Confirm `bash build.sh` was run, then retry.
-- **Existing environments are preserved**: updating only replaces the cac program itself. Environment data, identities, and proxy configs under `~/.cac/envs/` are kept intact.
-- **No need to re-run the installer**: shims point to your local checkout path, so `build.sh` updates take effect immediately.
-- **No need to recreate environments**: existing environments and configs are fully compatible.
+- **New commands/options not available** (e.g. `--autoupdate` shows `unknown option`): `bash build.sh` was not run or failed. Confirm it was run from Git Bash.
+- **mTLS shows `client cert not found`**: Older versions failed to generate certs on Windows due to an OpenSSL compatibility issue. After updating and running `bash build.sh`, simply reactivate the environment to auto-generate the missing cert.
+- **`bash build.sh` triggers WSL error**: Your system resolves `bash` to WSL instead of Git Bash. Open **Git Bash** from the Start Menu and run the command there.
 
 ### Uninstall
 
