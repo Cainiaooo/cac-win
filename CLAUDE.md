@@ -99,6 +99,14 @@ Windows protection boundary: any native subprocess that reads fingerprint data *
 - Zero npm runtime dependencies; the package ships only bash + vendored JS
 - `scripts/postinstall.js` handles npm post-install: makes binaries executable, syncs runtime JS files, patches wrappers, migrates old environments
 
+## New Feature Checklist
+
+When implementing a new feature, the following must be completed alongside the code changes:
+
+1. **Sync README** — update `README.md` to document the new feature: what it does, how to use it, and any new CLI flags/commands.
+2. **Upgrade impact** — since users clone this repo to install, state explicitly whether existing users need to re-run `cac setup`, re-create environments, or perform any migration steps after pulling the update. If no action is needed, say so.
+3. **Uninstall impact** — if the feature creates new files, directories, services, scheduled tasks, or system-level artifacts outside `~/.cac/`, document the additional cleanup steps users must take when running `cac self uninstall`. If the feature is fully contained within the existing uninstall path, note that no extra steps are required.
+
 ## Coding Style
 
 - Bash: `#!/usr/bin/env bash` + `set -euo pipefail`, 4-space indentation inside blocks, small helper functions, internal helpers use `_snake_case`
