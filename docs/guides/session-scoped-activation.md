@@ -26,11 +26,13 @@ With `--session`, activation lives only in the current terminal's environment va
 
 ### Temp-file handshake
 
-The core challenge: bash scripts run in subprocesses and cannot modify the parent shell's environment. The solution is a handshake via a temp file:
+The core challenge: bash scripts run in subprocesses and cannot modify the parent shell's environment. The solution is an activation-only handshake via a temp file:
 
 1. `cac <name> --session` writes the env name to `~/.cac/.session_env` (NOT `~/.cac/current`)
-2. The shell function (in `.bashrc` or PowerShell profile) reads `.session_env`, exports `CAC_ACTIVE_ENV=<name>`, and deletes the temp file
-3. The `~/.cac/bin/claude` wrapper checks `$CAC_ACTIVE_ENV` first, then falls back to `~/.cac/current`
+2. `cac <name>` writes `~/.cac/current` and also writes `~/.cac/.session_env` so the current shell follows the persistent activation
+3. The shell function (in `.bashrc` or PowerShell profile) reads `.session_env`, exports `CAC_ACTIVE_ENV=<name>`, and deletes the temp file
+4. Other `cac` commands do not write `.session_env`, so commands like `cac env ls` do not overwrite an existing session activation
+5. The `~/.cac/bin/claude` wrapper checks `$CAC_ACTIVE_ENV` first, then falls back to `~/.cac/current`
 
 ### Activation priority
 
@@ -50,10 +52,16 @@ The `_current_env()` helper (used by `cac env check`, relay management, etc.) ch
 |---|---|---|
 | Git Bash (Windows) | Yes | `.bashrc` shell function |
 | macOS/Linux bash/zsh | Yes | `.bashrc`/`.zshrc` shell function |
-| PowerShell (Windows) | Yes | `$PROFILE` function |
+| PowerShell (Windows) | Yes | profile function in both `WindowsPowerShell` and `PowerShell` profile paths |
 | CMD (Windows) | No | CMD has no shell function mechanism |
 
 For CMD, persistent activation (`cac <name>` without `--session`) works as before via `~/.cac/current`.
+
+## Upgrade Notes
+
+Existing users do not need to recreate environments. Run any `cac` command after updating to let setup refresh the shell profile snippets, then open a new terminal or re-source your shell profile. On Windows, both Windows PowerShell and PowerShell Core profile paths are updated when available.
+
+`cac self delete` already removes files under `~/.cac`; this feature only adds shell profile snippets outside that directory, using the existing marked `# >>> cac` / `# <<< cac` block.
 
 ## Interaction Matrix
 

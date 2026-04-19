@@ -1,5 +1,17 @@
 # ── cmd: env (environment management, like "uv venv") ────────────
 
+_env_record_activation() {
+    local name="$1" session="$2"
+    if [[ "$session" == "true" ]]; then
+        echo "$name" > "$CAC_DIR/.session_env"
+    else
+        echo "$name" > "$CAC_DIR/current"
+        # Keep the current shell in sync when cac is invoked through the shell function.
+        echo "$name" > "$CAC_DIR/.session_env"
+    fi
+    rm -f "$CAC_DIR/stopped"
+}
+
 _env_cmd_create() {
     _require_setup
     local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true persona="" claude_auto_update=false session=false
@@ -178,12 +190,7 @@ fs.writeFileSync(process.argv[3],JSON.stringify(merge(base,override),null,2));
     _generate_client_cert "$name" >/dev/null 2>&1 || true
 
     # Auto-activate
-    if [[ "$session" == "true" ]]; then
-        echo "$name" > "$CAC_DIR/.session_env"
-    else
-        echo "$name" > "$CAC_DIR/current"
-        rm -f "$CAC_DIR/stopped"
-    fi
+    _env_record_activation "$name" "$session"
     if [[ -d "$env_dir/.claude" ]]; then
         export CLAUDE_CONFIG_DIR="$env_dir/.claude"
     fi
@@ -287,12 +294,7 @@ _env_cmd_activate() {
 
     _timer_start
 
-    if [[ "$session" == "true" ]]; then
-        echo "$name" > "$CAC_DIR/.session_env"
-    else
-        echo "$name" > "$CAC_DIR/current"
-        rm -f "$CAC_DIR/stopped"
-    fi
+    _env_record_activation "$name" "$session"
 
     if [[ -d "$env_dir/.claude" ]]; then
         export CLAUDE_CONFIG_DIR="$env_dir/.claude"
@@ -488,7 +490,7 @@ cmd_env() {
             echo
             echo "  $(_bold "cac env") — environment management"
             echo
-            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--telemetry mode] [--persona preset] [--autoupdate]"
+            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--telemetry mode] [--persona preset] [--autoupdate] [--session]"
             echo "                             Create isolated environment (auto-activates)"
             echo "    $(_green "set") [name] <key> <value>        Modify environment"
             echo "                             proxy, version, telemetry, persona, autoupdate, tz, or lang"
