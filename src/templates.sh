@@ -267,11 +267,16 @@ if [[ -f "$CAC_DIR/stopped" ]]; then
     echo "[cac] error: real claude not found, reinstall with 'npm i -g claude-cac'" >&2; exit 1
 fi
 
-# read current environment
-if [[ ! -f "$CAC_DIR/current" ]]; then
+# read current environment: session env var takes priority over persistent file
+_name=""
+if [[ -n "${CAC_ACTIVE_ENV:-}" ]]; then
+    _name="$CAC_ACTIVE_ENV"
+elif [[ -f "$CAC_DIR/current" ]]; then
+    _name=$(tr -d '[:space:]' < "$CAC_DIR/current")
+fi
+if [[ -z "$_name" ]]; then
     echo "[cac] error: no active environment, run 'cac <name>'" >&2; exit 1
 fi
-_name=$(tr -d '[:space:]' < "$CAC_DIR/current")
 _env_dir="$ENVS_DIR/$_name"
 [[ -d "$_env_dir" ]] || { echo "[cac] error: environment '$_name' not found" >&2; exit 1; }
 
@@ -508,17 +513,18 @@ fi
 [[ -x "$_real" ]] || { echo "[cac] error: claude not found, run 'cac claude install latest'" >&2; exit 1; }
 
 # ── Relay local forwarding (always enabled when proxy is set) ──
-# Relay lifecycle: ENVIRONMENT-level, not session-level.
+# Relay lifecycle: one relay per cac environment, shared by sessions using that env.
 # - Started on demand by the first session that needs it
 # - Persists across sessions (no cleanup on exit)
-# - Restarted if proxy changes (relay.proxy mismatch)
-# - Stopped by: cac env activate (switch), cac self delete, or machine reboot
+# - Restarted if this env's proxy changes
+# - Stopped by: cac relay off, cac env stop, cac self delete, or machine reboot
 _relay_active=false
 if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
     _relay_js="$CAC_DIR/relay.js"
-    _relay_pid_file="$CAC_DIR/relay.pid"
-    _relay_port_file="$CAC_DIR/relay.port"
-    _relay_proxy_file="$CAC_DIR/relay.proxy"
+    _relay_pid_file="$_env_dir/relay.pid"
+    _relay_port_file="$_env_dir/relay.port"
+    _relay_proxy_file="$_env_dir/relay.proxy"
+    _relay_log_file="$_env_dir/relay.log"
 
     # check if relay is already running
     _relay_running=false
@@ -527,11 +533,11 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
         [[ -n "$_rpid" ]] && kill -0 "$_rpid" 2>/dev/null && _relay_running=true
     fi
 
-    # kill stale relay if proxy changed (env switch without going through cac activate)
-    # skip if relay.proxy absent (first run after upgrade — assume match)
-    if [[ "$_relay_running" == "true" ]] && [[ -f "$_relay_proxy_file" ]]; then
-        _old_proxy=$(tr -d '[:space:]' < "$_relay_proxy_file")
-        if [[ "$_old_proxy" != "$PROXY" ]]; then
+    # kill stale relay if proxy changed or port metadata is missing/unreachable
+    if [[ "$_relay_running" == "true" ]]; then
+        _old_proxy=$(tr -d '[:space:]' < "$_relay_proxy_file" 2>/dev/null || true)
+        _old_port=$(tr -d '[:space:]' < "$_relay_port_file" 2>/dev/null || true)
+        if [[ "$_old_proxy" != "$PROXY" ]] || [[ -z "$_old_port" ]] || ! _tcp_check 127.0.0.1 "$_old_port"; then
             kill "$_rpid" 2>/dev/null || true
             rm -f "$_relay_pid_file" "$_relay_port_file" "$_relay_proxy_file"
             _relay_running=false
@@ -545,7 +551,7 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
             (( _rport++ ))
             [[ $_rport -gt 17999 ]] && break
         done
-        node "$_relay_js" "$_rport" "$PROXY" "$_relay_pid_file" </dev/null >"$CAC_DIR/relay.log" 2>&1 &
+        node "$_relay_js" "$_rport" "$PROXY" "$_relay_pid_file" </dev/null >"$_relay_log_file" 2>&1 &
         disown 2>/dev/null || true
         for _ri in {1..30}; do
             _tcp_check 127.0.0.1 "$_rport" && break
@@ -555,10 +561,10 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
         echo "$_rport" > "$_relay_port_file"
     fi
 
-    # env-level watchdog singleton: auto-restarts relay if it crashes
-    # - one watchdog per environment, shared across all sessions
+    # env-level watchdog singleton: auto-restarts this env relay if it crashes
+    # - one watchdog per environment, shared across sessions using that env
     # - exits automatically when relay is intentionally stopped (relay.proxy removed)
-    _relay_watchdog_file="$CAC_DIR/relay.watchdog.pid"
+    _relay_watchdog_file="$_env_dir/relay.watchdog.pid"
     _wd_running=false
     if [[ -f "$_relay_watchdog_file" ]]; then
         _wpid=$(tr -d '[:space:]' < "$_relay_watchdog_file")
@@ -566,27 +572,27 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
     fi
     if [[ "$_wd_running" != "true" ]]; then
         (
-            trap 'rm -f "$CAC_DIR/relay.watchdog.pid"' EXIT
+            trap 'rm -f "$_relay_watchdog_file"' EXIT
             set +e
             while true; do
                 sleep 5
                 # relay.proxy removed by _relay_stop — intentional stop, exit watchdog
-                [[ -f "$CAC_DIR/relay.proxy" ]] || exit 0
+                [[ -f "$_relay_proxy_file" ]] || exit 0
                 # relay alive and port reachable — nothing to do
-                if [[ -f "$CAC_DIR/relay.pid" ]]; then
-                    _rpid=$(tr -d '[:space:]' < "$CAC_DIR/relay.pid")
+                if [[ -f "$_relay_pid_file" ]]; then
+                    _rpid=$(tr -d '[:space:]' < "$_relay_pid_file")
                     if kill -0 "$_rpid" 2>/dev/null; then
-                        _rport=$(tr -d '[:space:]' < "$CAC_DIR/relay.port" 2>/dev/null || true)
+                        _rport=$(tr -d '[:space:]' < "$_relay_port_file" 2>/dev/null || true)
                         _tcp_check 127.0.0.1 "$_rport" && continue
                         # process alive but port unresponsive — kill and restart
                         kill "$_rpid" 2>/dev/null || true
                     fi
                 fi
                 # relay dead — restart on same port with same proxy
-                _rport=$(tr -d '[:space:]' < "$CAC_DIR/relay.port" 2>/dev/null || true)
-                _rproxy=$(tr -d '[:space:]' < "$CAC_DIR/relay.proxy" 2>/dev/null || true)
+                _rport=$(tr -d '[:space:]' < "$_relay_port_file" 2>/dev/null || true)
+                _rproxy=$(tr -d '[:space:]' < "$_relay_proxy_file" 2>/dev/null || true)
                 [[ -n "$_rport" ]] && [[ -n "$_rproxy" ]] || exit 0
-                node "$CAC_DIR/relay.js" "$_rport" "$_rproxy" "$CAC_DIR/relay.pid" </dev/null >>"$CAC_DIR/relay.log" 2>&1 &
+                node "$CAC_DIR/relay.js" "$_rport" "$_rproxy" "$_relay_pid_file" </dev/null >>"$_relay_log_file" 2>&1 &
             done
         ) &
         _new_wpid=$!
@@ -687,7 +693,8 @@ if ! echo "$*" | grep -q "IOPlatformExpertDevice"; then
 fi
 
 # read current env UUID
-_uuid_file="$CAC_DIR/envs/$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)/uuid"
+_cac_env="${CAC_ACTIVE_ENV:-$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)}"
+_uuid_file="$CAC_DIR/envs/$_cac_env/uuid"
 if [[ ! -f "$_uuid_file" ]]; then
     _real=$(PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "$CAC_DIR/shim-bin" | tr '\n' ':') \
             command -v ioreg 2>/dev/null || true)
@@ -721,7 +728,8 @@ _real=$(PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "$CAC_DIR/shim-bin" | tr '\n
 
 # intercept /etc/machine-id and /var/lib/dbus/machine-id
 if [[ "$1" == "/etc/machine-id" ]] || [[ "$1" == "/var/lib/dbus/machine-id" ]]; then
-    _mid_file="$CAC_DIR/envs/$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)/machine_id"
+    _cac_env="${CAC_ACTIVE_ENV:-$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)}"
+    _mid_file="$CAC_DIR/envs/$_cac_env/machine_id"
     if [[ -f "$_mid_file" ]] && [[ -n "$_real" ]]; then
         exec "$_real" "$_mid_file"
     fi
@@ -741,7 +749,8 @@ _write_hostname_shim() {
 CAC_DIR="$HOME/.cac"
 
 # read spoofed hostname
-_hn_file="$CAC_DIR/envs/$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)/hostname"
+_cac_env="${CAC_ACTIVE_ENV:-$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)}"
+_hn_file="$CAC_DIR/envs/$_cac_env/hostname"
 if [[ -f "$_hn_file" ]]; then
     tr -d '[:space:]' < "$_hn_file"
     exit 0
@@ -763,7 +772,8 @@ CAC_DIR="$HOME/.cac"
 
 _real=$(PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "$CAC_DIR/shim-bin" | tr '\n' ':') command -v ifconfig 2>/dev/null || true)
 
-_mac_file="$CAC_DIR/envs/$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)/mac_address"
+_cac_env="${CAC_ACTIVE_ENV:-$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)}"
+_mac_file="$CAC_DIR/envs/$_cac_env/mac_address"
 if [[ -f "$_mac_file" ]] && [[ -n "$_real" ]]; then
     FAKE_MAC=$(tr -d '[:space:]' < "$_mac_file")
     "$_real" "$@" | sed "s/ether [0-9a-f:]\{17\}/ether $FAKE_MAC/g" && exit 0

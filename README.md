@@ -108,6 +108,9 @@ cac env create cloned --clone
 # 切换到某个环境
 cac work
 
+# 仅在当前终端激活（关闭终端后自动失效）
+cac work --session
+
 # 查看所有环境
 cac env ls
 ```
@@ -173,8 +176,8 @@ http://u:p@host:port
 
 | 命令 | 用途 |
 |:--|:--|
-| `cac env create <name> [-p proxy] [-c version] [--clone] [--autoupdate]` | 创建并激活环境 |
-| `cac <name>` | 切换到指定环境 |
+| `cac env create <name> [-p proxy] [-c version] [--clone] [--autoupdate] [--session]` | 创建并激活环境 |
+| `cac <name> [--session]` | 切换到指定环境（`--session` 仅当前终端） |
 | `cac env ls` / `cac ls` | 查看环境列表 |
 | `cac env rm <name>` | 删除环境 |
 | `cac env set [name] proxy <proxy>` | 设置环境代理 |

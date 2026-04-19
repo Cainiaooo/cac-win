@@ -1,8 +1,20 @@
 # ── cmd: env (environment management, like "uv venv") ────────────
 
+_env_record_activation() {
+    local name="$1" session="$2"
+    if [[ "$session" == "true" ]]; then
+        echo "$name" > "$CAC_DIR/.session_env"
+    else
+        echo "$name" > "$CAC_DIR/current"
+        # Keep the current shell in sync when cac is invoked through the shell function.
+        echo "$name" > "$CAC_DIR/.session_env"
+    fi
+    rm -f "$CAC_DIR/stopped"
+}
+
 _env_cmd_create() {
     _require_setup
-    local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true persona="" claude_auto_update=false
+    local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true persona="" claude_auto_update=false session=false
     # Windows: force copy mode (NTFS symlinks require admin privileges)
     case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) clone_link=false ;; esac
 
@@ -24,12 +36,13 @@ _env_cmd_create() {
             --autoupdate|--auto-update) claude_auto_update=true; shift ;;
             --clone)     shift; if [[ -n "${1:-}" ]] && [[ "${1:-}" != -* ]]; then clone_source="$1"; shift; else clone_source="host"; fi ;;
             --no-link)   clone_link=false; shift ;;
+            --session|-s) session=true; shift ;;
             -*)          _die "unknown option: $1" ;;
             *)           [[ -z "$name" ]] && name="$1" || _die "extra argument: $1"; shift ;;
         esac
     done
 
-    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--telemetry <mode>] [--persona <preset>] [--autoupdate]"
+    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--telemetry <mode>] [--persona <preset>] [--autoupdate] [--session]"
     [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || _die "invalid name '$name' (use alphanumeric, dash, underscore)"
 
     local env_dir="$ENVS_DIR/$name"
@@ -177,8 +190,7 @@ fs.writeFileSync(process.argv[3],JSON.stringify(merge(base,override),null,2));
     _generate_client_cert "$name" >/dev/null 2>&1 || true
 
     # Auto-activate
-    echo "$name" > "$CAC_DIR/current"
-    rm -f "$CAC_DIR/stopped"
+    _env_record_activation "$name" "$session"
     if [[ -d "$env_dir/.claude" ]]; then
         export CLAUDE_CONFIG_DIR="$env_dir/.claude"
     fi
@@ -257,8 +269,11 @@ _env_cmd_rm() {
     local name="$1"
     _require_env "$name"
 
-    local current; current=$(_current_env)
+    local current persistent_current
+    current=$(_current_env)
+    persistent_current=$(_read "$CAC_DIR/current" "")
     [[ "$name" != "$current" ]] || _die "cannot remove active environment $(_cyan "'$name'")\n  switch to another environment first"
+    [[ -z "$persistent_current" || "$name" != "$persistent_current" ]] || _die "cannot remove persistent active environment $(_cyan "'$name'")\n  switch the persistent environment first with: cac <other-env>"
 
     rm -rf "${ENVS_DIR:?}/$name"
     echo "$(_green_bold "Removed") environment $(_cyan "$name")"
@@ -266,7 +281,15 @@ _env_cmd_rm() {
 
 _env_cmd_activate() {
     _require_setup
-    local name="$1"
+    local name="" session=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --session|-s) session=true; shift ;;
+            -*)           _die "unknown option: $1 (did you mean --session?)" ;;
+            *)            [[ -z "$name" ]] && name="$1" || _die "unexpected argument: $1"; shift ;;
+        esac
+    done
+    [[ -n "$name" ]] || _die "usage: cac <name> [--session]"
     _require_env "$name"
     local env_dir="$ENVS_DIR/$name"
 
@@ -274,8 +297,7 @@ _env_cmd_activate() {
 
     _timer_start
 
-    echo "$name" > "$CAC_DIR/current"
-    rm -f "$CAC_DIR/stopped"
+    _env_record_activation "$name" "$session"
 
     if [[ -d "$env_dir/.claude" ]]; then
         export CLAUDE_CONFIG_DIR="$env_dir/.claude"
@@ -289,17 +311,20 @@ _env_cmd_activate() {
         _generate_client_cert "$name" >/dev/null 2>&1 || true
     fi
 
-    # Relay lifecycle
-    _relay_stop 2>/dev/null || true
+    # Relay lifecycle. Relay state is env-scoped so session activations can coexist.
     if [[ -f "$env_dir/relay" ]] && [[ "$(_read "$env_dir/relay")" == "on" ]]; then
         if _relay_start "$name" 2>/dev/null; then
-            local rport; rport=$(_read "$CAC_DIR/relay.port")
+            local rport; rport=$(_read "$env_dir/relay.port")
             echo "  $(_green "+") relay: 127.0.0.1:$rport"
         fi
     fi
 
     local elapsed; elapsed=$(_timer_elapsed)
-    echo "$(_green_bold "Activated") $(_bold "$name") $(_dim "in $elapsed")"
+    if [[ "$session" == "true" ]]; then
+        echo "$(_green_bold "Activated") $(_bold "$name") $(_dim "(session-only, this terminal)") $(_dim "in $elapsed")"
+    else
+        echo "$(_green_bold "Activated") $(_bold "$name") $(_dim "in $elapsed")"
+    fi
 }
 
 _env_cmd_set() {
@@ -447,7 +472,7 @@ _env_cmd_set() {
 }
 
 _env_cmd_stop() {
-    _relay_stop 2>/dev/null || true
+    _relay_stop_all 2>/dev/null || true
     touch "$CAC_DIR/stopped"
     echo "  $(_green "✓") cac paused — claude will run without any cac injection"
     echo "  $(_dim "resume with:") $(_green "cac <name>")"
@@ -467,7 +492,7 @@ cmd_env() {
             echo
             echo "  $(_bold "cac env") — environment management"
             echo
-            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--telemetry mode] [--persona preset] [--autoupdate]"
+            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--telemetry mode] [--persona preset] [--autoupdate] [--session]"
             echo "                             Create isolated environment (auto-activates)"
             echo "    $(_green "set") [name] <key> <value>        Modify environment"
             echo "                             proxy, version, telemetry, persona, autoupdate, tz, or lang"
