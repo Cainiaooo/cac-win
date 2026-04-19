@@ -30,7 +30,7 @@ That's it. Your new `work` environment now has all your customizations, with its
 | `skills/` | Symlinked | Copied |
 | `plugins/` | Symlinked | Copied |
 | `CLAUDE.md` | Symlinked | Copied + cac instructions appended |
-| `settings.json` | Layered merge via `settings.override.json` | Layered merge via `settings.override.json` |
+| `settings.json` | Layered merge via `settings.override.json` on each startup | One-time merged copy at creation |
 
 What's **not** inherited (always generated fresh per environment):
 - Device identity (UUID, hostname, MAC address, machine ID)
@@ -77,13 +77,15 @@ This is useful when you've customized one cac environment and want to branch off
 
 ## Settings merge
 
-Settings use a layered merge system regardless of symlink/copy mode:
+Settings behave differently depending on clone mode.
+
+In symlink mode, settings use a layered merge system:
 
 1. **Base**: `settings.json` from the source (host `~/.claude/` or another env)
 2. **Override**: `settings.override.json` in the environment (cac-specific overrides)
 3. **Result**: Merged `settings.json` written to the environment's `.claude/` directory
 
-The merge happens on each `claude` startup, so if you update your base settings, all cloned environments pick up the changes automatically.
+The merge happens on each `claude` startup, so if you update your base settings, linked cloned environments pick up the changes automatically.
 
 ```
 ~/.claude/settings.json          (your shared base)
@@ -91,6 +93,14 @@ The merge happens on each `claude` startup, so if you update your base settings,
 env/.claude/settings.override.json  (cac overrides: permissions, statusline, etc.)
     =
 env/.claude/settings.json        (merged result, auto-generated)
+```
+
+With `--no-link`, cac performs that merge once during creation and then stops tracking the source. The copied environment has its own independent `settings.json`, so later changes to `~/.claude/settings.json` do not affect it.
+
+If you created a copied environment with an older cac version and it still picks up source settings changes, detach it:
+
+```bash
+cac env detach work
 ```
 
 ## Typical workflow

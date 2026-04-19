@@ -218,6 +218,73 @@ echo ""
 echo "[T19] env check read 兼容 set -e"
 grep -q 'read -r proxy_ip ip_tz .*|| true' "$PROJECT_DIR/src/cmd_check.sh" && pass "proxy metadata read 已防止提前退出" || fail "proxy metadata read 仍可能提前退出"
 
+# ── T20: --no-link settings 隔离 ──
+echo ""
+echo "[T20] --no-link settings 隔离"
+source "$PROJECT_DIR/src/templates.sh" 2>/dev/null || { echo "FATAL: cannot source templates.sh"; exit 1; }
+source "$PROJECT_DIR/src/cmd_env.sh" 2>/dev/null || { echo "FATAL: cannot source cmd_env.sh"; exit 1; }
+
+tmp_home=$(mktemp -d)
+tmp_cac=$(mktemp -d)
+old_home="$HOME"
+old_cac_dir="${CAC_DIR:-}"
+old_envs_dir="${ENVS_DIR:-}"
+old_versions_dir="${VERSIONS_DIR:-}"
+HOME="$tmp_home"
+CAC_DIR="$tmp_cac"
+ENVS_DIR="$CAC_DIR/envs"
+VERSIONS_DIR="$CAC_DIR/versions"
+mkdir -p "$HOME/.claude" "$ENVS_DIR" "$VERSIONS_DIR/2.1.97"
+echo '{"source":"value","env":{"SOURCE_ONLY":"1"}}' > "$HOME/.claude/settings.json"
+touch "$VERSIONS_DIR/2.1.97/claude.exe" "$VERSIONS_DIR/2.1.97/claude"
+chmod +x "$VERSIONS_DIR/2.1.97/claude.exe" "$VERSIONS_DIR/2.1.97/claude"
+
+_ensure_initialized() { mkdir -p "$CAC_DIR" "$ENVS_DIR" "$VERSIONS_DIR"; }
+_ensure_version_installed() { echo "2.1.97"; }
+_generate_client_cert() { return 0; }
+
+if ( _env_cmd_create copied --clone --no-link -c 2.1.97 ) >/dev/null 2>&1; then
+    [[ -f "$ENVS_DIR/copied/clone_mode" ]] && [[ "$(_read "$ENVS_DIR/copied/clone_mode")" == "copied" ]] \
+        && pass "copy 模式写入 clone_mode=copied" \
+        || fail "copy 模式缺少 clone_mode=copied"
+    [[ ! -f "$ENVS_DIR/copied/clone_source" ]] \
+        && pass "copy 模式不写 clone_source" \
+        || fail "copy 模式仍写入 clone_source"
+    [[ ! -f "$ENVS_DIR/copied/.claude/settings.override.json" ]] \
+        && pass "copy 模式不写 settings.override.json" \
+        || fail "copy 模式仍写入 settings.override.json"
+    grep -q '"source": "value"' "$ENVS_DIR/copied/.claude/settings.json" \
+        && pass "copy 模式创建时完成一次性 settings merge" \
+        || fail "copy 模式未完成一次性 settings merge"
+else
+    fail "_env_cmd_create --clone --no-link 失败"
+fi
+
+mkdir -p "$ENVS_DIR/legacy/.claude"
+echo '{"legacy":"merged"}' > "$ENVS_DIR/legacy/.claude/settings.json"
+echo '{"legacy":"override"}' > "$ENVS_DIR/legacy/.claude/settings.override.json"
+echo "$HOME/.claude" > "$ENVS_DIR/legacy/clone_source"
+if ( _env_cmd_detach legacy ) >/dev/null 2>&1; then
+    [[ ! -f "$ENVS_DIR/legacy/clone_source" ]] && [[ ! -f "$ENVS_DIR/legacy/.claude/settings.override.json" ]] \
+        && pass "detach 清理旧 merge 残留" \
+        || fail "detach 未清理旧 merge 残留"
+    [[ "$(_read "$ENVS_DIR/legacy/clone_mode")" == "copied" ]] \
+        && pass "detach 写入 clone_mode=copied" \
+        || fail "detach 未写入 clone_mode=copied"
+else
+    fail "_env_cmd_detach legacy 失败"
+fi
+
+grep -q '_clone_mode.*copied' "$PROJECT_DIR/src/templates.sh" \
+    && pass "wrapper merge 受 clone_mode=copied 保护" \
+    || fail "wrapper merge 缺少 clone_mode=copied 保护"
+
+HOME="$old_home"
+CAC_DIR="$old_cac_dir"
+ENVS_DIR="$old_envs_dir"
+VERSIONS_DIR="$old_versions_dir"
+rm -rf "$tmp_home" "$tmp_cac"
+
 # ── 总结 ──
 echo ""
 echo "════════════════════════════════════════════════════════"

@@ -281,7 +281,9 @@ if [[ -d "$_env_dir/.claude" ]]; then
     # ensure settings.json exists, prevent Claude Code fallback to ~/.claude/settings.json
     [[ -f "$_env_dir/.claude/settings.json" ]] || echo '{}' > "$_env_dir/.claude/settings.json"
     # Merge settings: if override exists, re-merge from source on each start (skip if unchanged)
-    if [[ -f "$_env_dir/.claude/settings.override.json" ]]; then
+    _clone_mode=""
+    [[ -f "$_env_dir/clone_mode" ]] && _clone_mode=$(tr -d '[:space:]' < "$_env_dir/clone_mode")
+    if [[ "$_clone_mode" != "copied" ]] && [[ -f "$_env_dir/.claude/settings.override.json" ]]; then
         _src_settings=""
         if [[ -f "$_env_dir/clone_source" ]]; then
             _src_settings="$(tr -d '[:space:]' < "$_env_dir/clone_source")/settings.json"
