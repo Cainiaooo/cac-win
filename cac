@@ -487,7 +487,7 @@ _write_path_to_ps_profile() {
         ps_profile="$ps_profile_dir/Microsoft.PowerShell_profile.ps1"
 
         if [[ -f "$ps_profile" ]] && grep -q '# >>> cac — Claude Code Cloak >>>' "$ps_profile" 2>/dev/null; then
-            if grep -q 'currentFile' "$ps_profile" 2>/dev/null; then
+            if grep -qE 'currentFile|cacScriptDir|cacPs1|cacCmd' "$ps_profile" 2>/dev/null; then
                 _remove_path_from_rc "$ps_profile" >/dev/null 2>&1 || true
             else
                 echo "  ✓ cac function already in $ps_profile, skipping"
@@ -499,12 +499,20 @@ _write_path_to_ps_profile() {
 
 # >>> cac — Claude Code Cloak >>>
 function cac {
-    $cacScriptDir = Join-Path $env:USERPROFILE ".cac\bin"
-    $cacPs1 = Join-Path $cacScriptDir "cac.ps1"
-    $cacCmd = Join-Path $cacScriptDir "cac.cmd"
-    if (Test-Path $cacPs1) { & $cacPs1 @args }
-    elseif (Test-Path $cacCmd) { & $cacCmd @args }
-    else { Write-Error "[cac] cac not found in $cacScriptDir"; return 1 }
+    $cacHomeBin = Join-Path $env:USERPROFILE ".cac\bin"
+    $cacCommand = Get-Command cac -CommandType Application,ExternalScript -All -ErrorAction SilentlyContinue |
+        Where-Object {
+            try {
+                $source = [System.IO.Path]::GetFullPath($_.Source)
+                $homeBin = [System.IO.Path]::GetFullPath($cacHomeBin)
+                -not $source.StartsWith($homeBin, [System.StringComparison]::OrdinalIgnoreCase)
+            } catch {
+                $true
+            }
+        } |
+        Select-Object -First 1
+    if ($cacCommand) { & $cacCommand.Source @args }
+    else { Write-Error "[cac] cac binary not found in PATH"; return 1 }
     $sessionFile = Join-Path $env:USERPROFILE ".cac\.session_env"
     if (Test-Path $sessionFile) {
         $nextEnv = (Get-Content $sessionFile -Raw).Trim()
@@ -1688,17 +1696,18 @@ fi
 [[ -x "$_real" ]] || { echo "[cac] error: claude not found, run 'cac claude install latest'" >&2; exit 1; }
 
 # ── Relay local forwarding (always enabled when proxy is set) ──
-# Relay lifecycle: ENVIRONMENT-level, not session-level.
+# Relay lifecycle: one relay per cac environment, shared by sessions using that env.
 # - Started on demand by the first session that needs it
 # - Persists across sessions (no cleanup on exit)
-# - Restarted if proxy changes (relay.proxy mismatch)
-# - Stopped by: cac env activate (switch), cac self delete, or machine reboot
+# - Restarted if this env's proxy changes
+# - Stopped by: cac relay off, cac env stop, cac self delete, or machine reboot
 _relay_active=false
 if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
     _relay_js="$CAC_DIR/relay.js"
-    _relay_pid_file="$CAC_DIR/relay.pid"
-    _relay_port_file="$CAC_DIR/relay.port"
-    _relay_proxy_file="$CAC_DIR/relay.proxy"
+    _relay_pid_file="$_env_dir/relay.pid"
+    _relay_port_file="$_env_dir/relay.port"
+    _relay_proxy_file="$_env_dir/relay.proxy"
+    _relay_log_file="$_env_dir/relay.log"
 
     # check if relay is already running
     _relay_running=false
@@ -1707,11 +1716,11 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
         [[ -n "$_rpid" ]] && kill -0 "$_rpid" 2>/dev/null && _relay_running=true
     fi
 
-    # kill stale relay if proxy changed (env switch without going through cac activate)
-    # skip if relay.proxy absent (first run after upgrade — assume match)
-    if [[ "$_relay_running" == "true" ]] && [[ -f "$_relay_proxy_file" ]]; then
-        _old_proxy=$(tr -d '[:space:]' < "$_relay_proxy_file")
-        if [[ "$_old_proxy" != "$PROXY" ]]; then
+    # kill stale relay if proxy changed or port metadata is missing/unreachable
+    if [[ "$_relay_running" == "true" ]]; then
+        _old_proxy=$(tr -d '[:space:]' < "$_relay_proxy_file" 2>/dev/null || true)
+        _old_port=$(tr -d '[:space:]' < "$_relay_port_file" 2>/dev/null || true)
+        if [[ "$_old_proxy" != "$PROXY" ]] || [[ -z "$_old_port" ]] || ! _tcp_check 127.0.0.1 "$_old_port"; then
             kill "$_rpid" 2>/dev/null || true
             rm -f "$_relay_pid_file" "$_relay_port_file" "$_relay_proxy_file"
             _relay_running=false
@@ -1725,7 +1734,7 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
             (( _rport++ ))
             [[ $_rport -gt 17999 ]] && break
         done
-        node "$_relay_js" "$_rport" "$PROXY" "$_relay_pid_file" </dev/null >"$CAC_DIR/relay.log" 2>&1 &
+        node "$_relay_js" "$_rport" "$PROXY" "$_relay_pid_file" </dev/null >"$_relay_log_file" 2>&1 &
         disown 2>/dev/null || true
         for _ri in {1..30}; do
             _tcp_check 127.0.0.1 "$_rport" && break
@@ -1735,10 +1744,10 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
         echo "$_rport" > "$_relay_port_file"
     fi
 
-    # env-level watchdog singleton: auto-restarts relay if it crashes
-    # - one watchdog per environment, shared across all sessions
+    # env-level watchdog singleton: auto-restarts this env relay if it crashes
+    # - one watchdog per environment, shared across sessions using that env
     # - exits automatically when relay is intentionally stopped (relay.proxy removed)
-    _relay_watchdog_file="$CAC_DIR/relay.watchdog.pid"
+    _relay_watchdog_file="$_env_dir/relay.watchdog.pid"
     _wd_running=false
     if [[ -f "$_relay_watchdog_file" ]]; then
         _wpid=$(tr -d '[:space:]' < "$_relay_watchdog_file")
@@ -1746,27 +1755,27 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
     fi
     if [[ "$_wd_running" != "true" ]]; then
         (
-            trap 'rm -f "$CAC_DIR/relay.watchdog.pid"' EXIT
+            trap 'rm -f "$_relay_watchdog_file"' EXIT
             set +e
             while true; do
                 sleep 5
                 # relay.proxy removed by _relay_stop — intentional stop, exit watchdog
-                [[ -f "$CAC_DIR/relay.proxy" ]] || exit 0
+                [[ -f "$_relay_proxy_file" ]] || exit 0
                 # relay alive and port reachable — nothing to do
-                if [[ -f "$CAC_DIR/relay.pid" ]]; then
-                    _rpid=$(tr -d '[:space:]' < "$CAC_DIR/relay.pid")
+                if [[ -f "$_relay_pid_file" ]]; then
+                    _rpid=$(tr -d '[:space:]' < "$_relay_pid_file")
                     if kill -0 "$_rpid" 2>/dev/null; then
-                        _rport=$(tr -d '[:space:]' < "$CAC_DIR/relay.port" 2>/dev/null || true)
+                        _rport=$(tr -d '[:space:]' < "$_relay_port_file" 2>/dev/null || true)
                         _tcp_check 127.0.0.1 "$_rport" && continue
                         # process alive but port unresponsive — kill and restart
                         kill "$_rpid" 2>/dev/null || true
                     fi
                 fi
                 # relay dead — restart on same port with same proxy
-                _rport=$(tr -d '[:space:]' < "$CAC_DIR/relay.port" 2>/dev/null || true)
-                _rproxy=$(tr -d '[:space:]' < "$CAC_DIR/relay.proxy" 2>/dev/null || true)
+                _rport=$(tr -d '[:space:]' < "$_relay_port_file" 2>/dev/null || true)
+                _rproxy=$(tr -d '[:space:]' < "$_relay_proxy_file" 2>/dev/null || true)
                 [[ -n "$_rport" ]] && [[ -n "$_rproxy" ]] || exit 0
-                node "$CAC_DIR/relay.js" "$_rport" "$_rproxy" "$CAC_DIR/relay.pid" </dev/null >>"$CAC_DIR/relay.log" 2>&1 &
+                node "$CAC_DIR/relay.js" "$_rport" "$_rproxy" "$_relay_pid_file" </dev/null >>"$_relay_log_file" 2>&1 &
             done
         ) &
         _new_wpid=$!
@@ -2127,7 +2136,7 @@ _env_cmd_create() {
         esac
     done
 
-    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--telemetry <mode>] [--persona <preset>] [--autoupdate]"
+    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--telemetry <mode>] [--persona <preset>] [--autoupdate] [--session]"
     [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || _die "invalid name '$name' (use alphanumeric, dash, underscore)"
 
     local env_dir="$ENVS_DIR/$name"
@@ -2354,8 +2363,11 @@ _env_cmd_rm() {
     local name="$1"
     _require_env "$name"
 
-    local current; current=$(_current_env)
+    local current persistent_current
+    current=$(_current_env)
+    persistent_current=$(_read "$CAC_DIR/current" "")
     [[ "$name" != "$current" ]] || _die "cannot remove active environment $(_cyan "'$name'")\n  switch to another environment first"
+    [[ -z "$persistent_current" || "$name" != "$persistent_current" ]] || _die "cannot remove persistent active environment $(_cyan "'$name'")\n  switch the persistent environment first with: cac <other-env>"
 
     rm -rf "${ENVS_DIR:?}/$name"
     echo "$(_green_bold "Removed") environment $(_cyan "$name")"
@@ -2393,11 +2405,10 @@ _env_cmd_activate() {
         _generate_client_cert "$name" >/dev/null 2>&1 || true
     fi
 
-    # Relay lifecycle
-    _relay_stop 2>/dev/null || true
+    # Relay lifecycle. Relay state is env-scoped so session activations can coexist.
     if [[ -f "$env_dir/relay" ]] && [[ "$(_read "$env_dir/relay")" == "on" ]]; then
         if _relay_start "$name" 2>/dev/null; then
-            local rport; rport=$(_read "$CAC_DIR/relay.port")
+            local rport; rport=$(_read "$env_dir/relay.port")
             echo "  $(_green "+") relay: 127.0.0.1:$rport"
         fi
     fi
@@ -2555,7 +2566,7 @@ _env_cmd_set() {
 }
 
 _env_cmd_stop() {
-    _relay_stop 2>/dev/null || true
+    _relay_stop_all 2>/dev/null || true
     touch "$CAC_DIR/stopped"
     echo "  $(_green "✓") cac paused — claude will run without any cac injection"
     echo "  $(_dim "resume with:") $(_green "cac <name>")"
@@ -2602,12 +2613,32 @@ cmd_env() {
 
 _relay_start() {
     local name="${1:-$(_current_env)}"
+    [[ -n "$name" ]] || return 1
     local env_dir="$ENVS_DIR/$name"
     local proxy; proxy=$(_read "$env_dir/proxy")
     [[ -z "$proxy" ]] && return 1
 
     local relay_js="$CAC_DIR/relay.js"
     [[ -f "$relay_js" ]] || { echo "error: relay.js not found, reinstall with 'npm i -g claude-cac'" >&2; return 1; }
+
+    local pid_file="$env_dir/relay.pid"
+    local port_file="$env_dir/relay.port"
+    local proxy_file="$env_dir/relay.proxy"
+    local log_file="$env_dir/relay.log"
+
+    if [[ -f "$pid_file" ]]; then
+        local existing_pid; existing_pid=$(tr -d '[:space:]' < "$pid_file")
+        if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+            local existing_port existing_proxy
+            existing_port=$(_read "$port_file" "")
+            existing_proxy=$(_read "$proxy_file" "")
+            if [[ "$existing_proxy" == "$proxy" ]] && [[ -n "$existing_port" ]] && _tcp_check 127.0.0.1 "$existing_port"; then
+                return 0
+            fi
+            kill "$existing_pid" 2>/dev/null || true
+        fi
+        rm -f "$pid_file" "$port_file" "$proxy_file"
+    fi
 
     # find available port (17890-17999)
     local port=17890
@@ -2619,8 +2650,7 @@ _relay_start() {
         fi
     done
 
-    local pid_file="$CAC_DIR/relay.pid"
-    node "$relay_js" "$port" "$proxy" "$pid_file" </dev/null >"$CAC_DIR/relay.log" 2>&1 &
+    node "$relay_js" "$port" "$proxy" "$pid_file" </dev/null >"$log_file" 2>&1 &
     disown 2>/dev/null || true
 
     # wait for relay ready
@@ -2635,13 +2665,16 @@ _relay_start() {
         return 1
     fi
 
-    echo "$proxy" > "$CAC_DIR/relay.proxy"
-    echo "$port" > "$CAC_DIR/relay.port"
+    echo "$proxy" > "$proxy_file"
+    echo "$port" > "$port_file"
     return 0
 }
 
 _relay_stop() {
-    local pid_file="$CAC_DIR/relay.pid"
+    local name="${1:-$(_current_env)}"
+    [[ -n "$name" ]] || return 0
+    local env_dir="$ENVS_DIR/$name"
+    local pid_file="$env_dir/relay.pid"
     if [[ -f "$pid_file" ]]; then
         local pid; pid=$(tr -d '[:space:]' < "$pid_file")
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
@@ -2655,11 +2688,11 @@ _relay_stop() {
         fi
         rm -f "$pid_file"
     fi
-    rm -f "$CAC_DIR/relay.port" "$CAC_DIR/relay.proxy"
+    rm -f "$env_dir/relay.port" "$env_dir/relay.proxy"
 
     # stop watchdog (relay.proxy already removed above, watchdog will self-exit within 5s;
     # kill it immediately for clean teardown)
-    local wd_file="$CAC_DIR/relay.watchdog.pid"
+    local wd_file="$env_dir/relay.watchdog.pid"
     if [[ -f "$wd_file" ]]; then
         local wd_pid; wd_pid=$(tr -d '[:space:]' < "$wd_file")
         [[ -n "$wd_pid" ]] && kill "$wd_pid" 2>/dev/null || true
@@ -2670,8 +2703,21 @@ _relay_stop() {
     _relay_remove_route 2>/dev/null || true
 }
 
+_relay_stop_all() {
+    local env_dir name
+    for env_dir in "$ENVS_DIR"/*; do
+        [[ -d "$env_dir" ]] || continue
+        name=$(basename "$env_dir")
+        _relay_stop "$name" 2>/dev/null || true
+    done
+    rm -f "$CAC_DIR/relay.pid" "$CAC_DIR/relay.port" "$CAC_DIR/relay.proxy" "$CAC_DIR/relay.watchdog.pid"
+    _relay_remove_route 2>/dev/null || true
+}
+
 _relay_is_running() {
-    local pid_file="$CAC_DIR/relay.pid"
+    local name="${1:-$(_current_env)}"
+    [[ -n "$name" ]] || return 1
+    local pid_file="$ENVS_DIR/$name/relay.pid"
     [[ -f "$pid_file" ]] || return 1
     local pid; pid=$(tr -d '[:space:]' < "$pid_file")
     [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
@@ -2786,10 +2832,10 @@ cmd_relay() {
             fi
 
             # start relay if not running
-            if ! _relay_is_running; then
+            if ! _relay_is_running "$current"; then
                 printf "  starting relay ... "
                 if _relay_start "$current"; then
-                    local port; port=$(_read "$CAC_DIR/relay.port")
+                    local port; port=$(_read "$env_dir/relay.port")
                     echo "$(_green "✓") 127.0.0.1:$port"
                 else
                     echo "$(_red "✗ failed to start")"
@@ -2799,7 +2845,7 @@ cmd_relay() {
             ;;
         off)
             rm -f "$env_dir/relay"
-            _relay_stop
+            _relay_stop "$current"
             echo "$(_green "✓") Relay disabled (env: $(_bold "$current"))"
             ;;
         status)
@@ -2813,9 +2859,9 @@ cmd_relay() {
                 return
             fi
 
-            if _relay_is_running; then
-                local pid; pid=$(_read "$CAC_DIR/relay.pid")
-                local port; port=$(_read "$CAC_DIR/relay.port" "unknown")
+            if _relay_is_running "$current"; then
+                local pid; pid=$(_read "$env_dir/relay.pid")
+                local port; port=$(_read "$env_dir/relay.port" "unknown")
                 echo "Relay process: $(_green "running") (PID=$pid, port=$port)"
             else
                 echo "Relay process: $(_yellow "not started") (will auto-start with claude)"
@@ -3126,16 +3172,17 @@ try {
 
             if [[ "$has_conflict" == "true" ]]; then
                 local relay_ok=false
-                if _relay_is_running 2>/dev/null; then
-                    local rport; rport=$(_read "$CAC_DIR/relay.port" "")
+                local _test_env; _test_env=$(_current_env)
+                local _test_env_dir="$ENVS_DIR/$_test_env"
+                if _relay_is_running "$_test_env" 2>/dev/null; then
+                    local rport; rport=$(_read "$_test_env_dir/relay.port" "")
                     local relay_ip; relay_ip=$(curl --proxy "http://127.0.0.1:$rport" --connect-timeout 8 --max-time 12 https://api.ipify.org 2>/dev/null || true)
                     [[ -n "$relay_ip" ]] && relay_ok=true
                 elif [[ -f "$CAC_DIR/relay.js" ]]; then
-                    local _test_env; _test_env=$(_current_env)
                     if _relay_start "$_test_env" 2>/dev/null; then
-                        local rport; rport=$(_read "$CAC_DIR/relay.port" "")
+                        local rport; rport=$(_read "$_test_env_dir/relay.port" "")
                         local relay_ip; relay_ip=$(curl --proxy "http://127.0.0.1:$rport" --connect-timeout 8 --max-time 12 https://api.ipify.org 2>/dev/null || true)
-                        _relay_stop 2>/dev/null || true
+                        _relay_stop "$_test_env" 2>/dev/null || true
                         [[ -n "$relay_ip" ]] && relay_ok=true
                     fi
                 fi
@@ -4197,7 +4244,7 @@ cmd_delete() {
 
     # stop relay processes and routes
     if [[ -d "$CAC_DIR" ]]; then
-        _relay_stop 2>/dev/null || true
+        _relay_stop_all 2>/dev/null || true
 
         # stop docker port-forward processes
         if [[ -d /tmp/cac-docker-ports ]]; then

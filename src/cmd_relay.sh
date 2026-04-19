@@ -2,12 +2,32 @@
 
 _relay_start() {
     local name="${1:-$(_current_env)}"
+    [[ -n "$name" ]] || return 1
     local env_dir="$ENVS_DIR/$name"
     local proxy; proxy=$(_read "$env_dir/proxy")
     [[ -z "$proxy" ]] && return 1
 
     local relay_js="$CAC_DIR/relay.js"
     [[ -f "$relay_js" ]] || { echo "error: relay.js not found, reinstall with 'npm i -g claude-cac'" >&2; return 1; }
+
+    local pid_file="$env_dir/relay.pid"
+    local port_file="$env_dir/relay.port"
+    local proxy_file="$env_dir/relay.proxy"
+    local log_file="$env_dir/relay.log"
+
+    if [[ -f "$pid_file" ]]; then
+        local existing_pid; existing_pid=$(tr -d '[:space:]' < "$pid_file")
+        if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+            local existing_port existing_proxy
+            existing_port=$(_read "$port_file" "")
+            existing_proxy=$(_read "$proxy_file" "")
+            if [[ "$existing_proxy" == "$proxy" ]] && [[ -n "$existing_port" ]] && _tcp_check 127.0.0.1 "$existing_port"; then
+                return 0
+            fi
+            kill "$existing_pid" 2>/dev/null || true
+        fi
+        rm -f "$pid_file" "$port_file" "$proxy_file"
+    fi
 
     # find available port (17890-17999)
     local port=17890
@@ -19,8 +39,7 @@ _relay_start() {
         fi
     done
 
-    local pid_file="$CAC_DIR/relay.pid"
-    node "$relay_js" "$port" "$proxy" "$pid_file" </dev/null >"$CAC_DIR/relay.log" 2>&1 &
+    node "$relay_js" "$port" "$proxy" "$pid_file" </dev/null >"$log_file" 2>&1 &
     disown 2>/dev/null || true
 
     # wait for relay ready
@@ -35,13 +54,16 @@ _relay_start() {
         return 1
     fi
 
-    echo "$proxy" > "$CAC_DIR/relay.proxy"
-    echo "$port" > "$CAC_DIR/relay.port"
+    echo "$proxy" > "$proxy_file"
+    echo "$port" > "$port_file"
     return 0
 }
 
 _relay_stop() {
-    local pid_file="$CAC_DIR/relay.pid"
+    local name="${1:-$(_current_env)}"
+    [[ -n "$name" ]] || return 0
+    local env_dir="$ENVS_DIR/$name"
+    local pid_file="$env_dir/relay.pid"
     if [[ -f "$pid_file" ]]; then
         local pid; pid=$(tr -d '[:space:]' < "$pid_file")
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
@@ -55,11 +77,11 @@ _relay_stop() {
         fi
         rm -f "$pid_file"
     fi
-    rm -f "$CAC_DIR/relay.port" "$CAC_DIR/relay.proxy"
+    rm -f "$env_dir/relay.port" "$env_dir/relay.proxy"
 
     # stop watchdog (relay.proxy already removed above, watchdog will self-exit within 5s;
     # kill it immediately for clean teardown)
-    local wd_file="$CAC_DIR/relay.watchdog.pid"
+    local wd_file="$env_dir/relay.watchdog.pid"
     if [[ -f "$wd_file" ]]; then
         local wd_pid; wd_pid=$(tr -d '[:space:]' < "$wd_file")
         [[ -n "$wd_pid" ]] && kill "$wd_pid" 2>/dev/null || true
@@ -70,8 +92,21 @@ _relay_stop() {
     _relay_remove_route 2>/dev/null || true
 }
 
+_relay_stop_all() {
+    local env_dir name
+    for env_dir in "$ENVS_DIR"/*; do
+        [[ -d "$env_dir" ]] || continue
+        name=$(basename "$env_dir")
+        _relay_stop "$name" 2>/dev/null || true
+    done
+    rm -f "$CAC_DIR/relay.pid" "$CAC_DIR/relay.port" "$CAC_DIR/relay.proxy" "$CAC_DIR/relay.watchdog.pid"
+    _relay_remove_route 2>/dev/null || true
+}
+
 _relay_is_running() {
-    local pid_file="$CAC_DIR/relay.pid"
+    local name="${1:-$(_current_env)}"
+    [[ -n "$name" ]] || return 1
+    local pid_file="$ENVS_DIR/$name/relay.pid"
     [[ -f "$pid_file" ]] || return 1
     local pid; pid=$(tr -d '[:space:]' < "$pid_file")
     [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
@@ -186,10 +221,10 @@ cmd_relay() {
             fi
 
             # start relay if not running
-            if ! _relay_is_running; then
+            if ! _relay_is_running "$current"; then
                 printf "  starting relay ... "
                 if _relay_start "$current"; then
-                    local port; port=$(_read "$CAC_DIR/relay.port")
+                    local port; port=$(_read "$env_dir/relay.port")
                     echo "$(_green "✓") 127.0.0.1:$port"
                 else
                     echo "$(_red "✗ failed to start")"
@@ -199,7 +234,7 @@ cmd_relay() {
             ;;
         off)
             rm -f "$env_dir/relay"
-            _relay_stop
+            _relay_stop "$current"
             echo "$(_green "✓") Relay disabled (env: $(_bold "$current"))"
             ;;
         status)
@@ -213,9 +248,9 @@ cmd_relay() {
                 return
             fi
 
-            if _relay_is_running; then
-                local pid; pid=$(_read "$CAC_DIR/relay.pid")
-                local port; port=$(_read "$CAC_DIR/relay.port" "unknown")
+            if _relay_is_running "$current"; then
+                local pid; pid=$(_read "$env_dir/relay.pid")
+                local port; port=$(_read "$env_dir/relay.port" "unknown")
                 echo "Relay process: $(_green "running") (PID=$pid, port=$port)"
             else
                 echo "Relay process: $(_yellow "not started") (will auto-start with claude)"

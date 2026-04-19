@@ -46,6 +46,10 @@ The core challenge: bash scripts run in subprocesses and cannot modify the paren
 
 The `_current_env()` helper (used by `cac env check`, relay management, etc.) checks `$CAC_ACTIVE_ENV` first, then `~/.cac/current`. This makes all existing callers session-aware with zero caller changes.
 
+### Relay isolation
+
+Local relay state is stored per environment (`~/.cac/envs/<name>/relay.*`). This lets two terminals run different session-scoped environments without one terminal replacing the other terminal's relay proxy or port.
+
 ## Platform Support
 
 | Terminal | Session Support | Mechanism |
@@ -75,9 +79,10 @@ Existing users do not need to recreate environments. Run any `cac` command after
 ## Files Changed
 
 - `src/main.sh` — pass all args to `_env_cmd_activate`
-- `src/cmd_env.sh` — `--session` flag in activate and create
+- `src/cmd_env.sh` — `--session` flag in activate and create, plus persistent-env removal guard
 - `src/utils.sh` — `_current_env()`, bash function in `_write_path_to_rc()`, new `_write_path_to_ps_profile()`
-- `src/templates.sh` — wrapper env var priority, 4 shim functions
+- `src/templates.sh` — wrapper env var priority, per-env relay state, 4 shim functions
+- `src/cmd_relay.sh` — per-env relay process metadata
 - `src/cmd_setup.sh` — call `_write_path_to_ps_profile()` on Windows
 - `src/cmd_help.sh` — document `--session`
 - `src/cmd_check.sh` — display session/persistent mode

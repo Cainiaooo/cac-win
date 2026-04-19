@@ -288,16 +288,17 @@ try {
 
             if [[ "$has_conflict" == "true" ]]; then
                 local relay_ok=false
-                if _relay_is_running 2>/dev/null; then
-                    local rport; rport=$(_read "$CAC_DIR/relay.port" "")
+                local _test_env; _test_env=$(_current_env)
+                local _test_env_dir="$ENVS_DIR/$_test_env"
+                if _relay_is_running "$_test_env" 2>/dev/null; then
+                    local rport; rport=$(_read "$_test_env_dir/relay.port" "")
                     local relay_ip; relay_ip=$(curl --proxy "http://127.0.0.1:$rport" --connect-timeout 8 --max-time 12 https://api.ipify.org 2>/dev/null || true)
                     [[ -n "$relay_ip" ]] && relay_ok=true
                 elif [[ -f "$CAC_DIR/relay.js" ]]; then
-                    local _test_env; _test_env=$(_current_env)
                     if _relay_start "$_test_env" 2>/dev/null; then
-                        local rport; rport=$(_read "$CAC_DIR/relay.port" "")
+                        local rport; rport=$(_read "$_test_env_dir/relay.port" "")
                         local relay_ip; relay_ip=$(curl --proxy "http://127.0.0.1:$rport" --connect-timeout 8 --max-time 12 https://api.ipify.org 2>/dev/null || true)
-                        _relay_stop 2>/dev/null || true
+                        _relay_stop "$_test_env" 2>/dev/null || true
                         [[ -n "$relay_ip" ]] && relay_ok=true
                     fi
                 fi

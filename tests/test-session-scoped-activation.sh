@@ -56,7 +56,20 @@ assert_eq "$(_read "$CAC_DIR/.session_env")" "dev" "session activation writes ha
 assert_no_file "$CAC_DIR/stopped" "session activation resumes cac"
 
 echo
-echo "[S02] bash shell function handshake"
+echo "[S02] persistent active env removal guard"
+mkdir -p "$ENVS_DIR/work" "$ENVS_DIR/dev"
+printf 'work\n' > "$CAC_DIR/current"
+export CAC_ACTIVE_ENV=dev
+if ( _env_cmd_rm work >/dev/null 2>&1 ); then
+    fail "cannot remove persistent active env during session"
+else
+    pass "cannot remove persistent active env during session"
+fi
+assert_file "$ENVS_DIR/work" "persistent active env still exists"
+unset CAC_ACTIVE_ENV
+
+echo
+echo "[S03] bash shell function handshake"
 shell_home="$tmpdir/home"
 mkdir -p "$shell_home/.cac/bin" "$tmpdir/toolbin"
 fake_cac="$tmpdir/toolbin/cac"
@@ -119,10 +132,12 @@ else
 fi
 
 echo
-echo "[S03] PowerShell profile coverage"
+echo "[S04] PowerShell profile coverage"
 if is_windows; then
     ps_home="$tmpdir/pshome"
+    ps_toolbin="$tmpdir/pstoolbin"
     mkdir -p "$ps_home/Documents/WindowsPowerShell" "$ps_home/Documents/PowerShell"
+    mkdir -p "$ps_home/.cac/bin" "$ps_toolbin"
     cat > "$ps_home/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1" <<'OLDPS'
 # >>> cac — Claude Code Cloak >>>
 function cac {
@@ -140,9 +155,42 @@ OLDPS
     ! grep -q 'currentFile' "$ps_home/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1" \
         && pass "PowerShell profile preserves session on non-activation commands" \
         || fail "PowerShell profile still resets from currentFile"
+    cat > "$ps_toolbin/cac.ps1" <<'FAKEPS'
+param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Rest)
+$cacDir = Join-Path $env:USERPROFILE ".cac"
+New-Item -ItemType Directory -Force $cacDir | Out-Null
+if (($Rest -join ' ') -eq 'dev --session') {
+    Set-Content -Path (Join-Path $cacDir ".session_env") -Value "dev"
+}
+FAKEPS
+    if command -v powershell.exe >/dev/null 2>&1; then
+        ps_home_win=$(cygpath -w "$ps_home")
+        ps_toolbin_win=$(cygpath -w "$ps_toolbin")
+        ps_profile_win=$(cygpath -w "$ps_home/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1")
+        if powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "\$env:USERPROFILE = '$ps_home_win'; \$env:Path = '$ps_toolbin_win;' + \$env:Path; . '$ps_profile_win'; cac dev --session; if (\$env:CAC_ACTIVE_ENV -ne 'dev') { exit 10 }; if (Test-Path (Join-Path \$env:USERPROFILE '.cac\.session_env')) { exit 11 }" >/dev/null 2>&1; then
+            pass "PowerShell profile invokes cac from PATH and applies handshake"
+        else
+            rc=$?
+            fail "PowerShell profile runtime handshake failed (exit $rc)"
+        fi
+    else
+        skip "powershell.exe unavailable for profile runtime test"
+    fi
 else
     skip "PowerShell profile generation is Windows-only"
 fi
+
+echo
+echo "[S05] relay state isolation"
+grep -q '_relay_pid_file="$_env_dir/relay.pid"' "$PROJECT_DIR/src/templates.sh" \
+    && pass "claude wrapper stores relay pid per env" \
+    || fail "claude wrapper still uses global relay pid"
+grep -q 'local pid_file="$env_dir/relay.pid"' "$PROJECT_DIR/src/cmd_relay.sh" \
+    && pass "relay command stores relay pid per env" \
+    || fail "relay command still uses global relay pid"
+grep -q '_relay_stop_all' "$PROJECT_DIR/src/cmd_env.sh" \
+    && pass "cac pause stops all env relays" \
+    || fail "cac pause does not stop all env relays"
 
 echo
 echo "════════════════════════════════════════════════════════"

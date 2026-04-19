@@ -477,7 +477,7 @@ _write_path_to_ps_profile() {
         ps_profile="$ps_profile_dir/Microsoft.PowerShell_profile.ps1"
 
         if [[ -f "$ps_profile" ]] && grep -q '# >>> cac — Claude Code Cloak >>>' "$ps_profile" 2>/dev/null; then
-            if grep -q 'currentFile' "$ps_profile" 2>/dev/null; then
+            if grep -qE 'currentFile|cacScriptDir|cacPs1|cacCmd' "$ps_profile" 2>/dev/null; then
                 _remove_path_from_rc "$ps_profile" >/dev/null 2>&1 || true
             else
                 echo "  ✓ cac function already in $ps_profile, skipping"
@@ -490,7 +490,7 @@ _write_path_to_ps_profile() {
 # >>> cac — Claude Code Cloak >>>
 function cac {
     $cacHomeBin = Join-Path $env:USERPROFILE ".cac\bin"
-    $cacCommand = Get-Command cac -CommandType Application -All -ErrorAction SilentlyContinue |
+    $cacCommand = Get-Command cac -CommandType Application,ExternalScript -All -ErrorAction SilentlyContinue |
         Where-Object {
             try {
                 $source = [System.IO.Path]::GetFullPath($_.Source)

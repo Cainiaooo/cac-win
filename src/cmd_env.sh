@@ -42,7 +42,7 @@ _env_cmd_create() {
         esac
     done
 
-    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--telemetry <mode>] [--persona <preset>] [--autoupdate]"
+    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--telemetry <mode>] [--persona <preset>] [--autoupdate] [--session]"
     [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || _die "invalid name '$name' (use alphanumeric, dash, underscore)"
 
     local env_dir="$ENVS_DIR/$name"
@@ -269,8 +269,11 @@ _env_cmd_rm() {
     local name="$1"
     _require_env "$name"
 
-    local current; current=$(_current_env)
+    local current persistent_current
+    current=$(_current_env)
+    persistent_current=$(_read "$CAC_DIR/current" "")
     [[ "$name" != "$current" ]] || _die "cannot remove active environment $(_cyan "'$name'")\n  switch to another environment first"
+    [[ -z "$persistent_current" || "$name" != "$persistent_current" ]] || _die "cannot remove persistent active environment $(_cyan "'$name'")\n  switch the persistent environment first with: cac <other-env>"
 
     rm -rf "${ENVS_DIR:?}/$name"
     echo "$(_green_bold "Removed") environment $(_cyan "$name")"
@@ -308,11 +311,10 @@ _env_cmd_activate() {
         _generate_client_cert "$name" >/dev/null 2>&1 || true
     fi
 
-    # Relay lifecycle
-    _relay_stop 2>/dev/null || true
+    # Relay lifecycle. Relay state is env-scoped so session activations can coexist.
     if [[ -f "$env_dir/relay" ]] && [[ "$(_read "$env_dir/relay")" == "on" ]]; then
         if _relay_start "$name" 2>/dev/null; then
-            local rport; rport=$(_read "$CAC_DIR/relay.port")
+            local rport; rport=$(_read "$env_dir/relay.port")
             echo "  $(_green "+") relay: 127.0.0.1:$rport"
         fi
     fi
@@ -470,7 +472,7 @@ _env_cmd_set() {
 }
 
 _env_cmd_stop() {
-    _relay_stop 2>/dev/null || true
+    _relay_stop_all 2>/dev/null || true
     touch "$CAC_DIR/stopped"
     echo "  $(_green "✓") cac paused — claude will run without any cac injection"
     echo "  $(_dim "resume with:") $(_green "cac <name>")"
