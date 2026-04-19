@@ -30,7 +30,7 @@ claude
 | `skills/` | 符号链接 | 复制 |
 | `plugins/` | 符号链接 | 复制 |
 | `CLAUDE.md` | 符号链接 | 复制 + 自动追加 cac 指令 |
-| `settings.json` | 通过 `settings.override.json` 分层合并 | 通过 `settings.override.json` 分层合并 |
+| `settings.json` | 每次启动通过 `settings.override.json` 分层合并 | 创建时一次性合并后独立 |
 
 以下内容**不会**被继承（每个环境独立生成）：
 - 设备身份（UUID、hostname、MAC 地址、machine ID）
@@ -77,13 +77,15 @@ cac env create work2 --clone work
 
 ## Settings 合并机制
 
-无论符号链接还是复制模式，settings 都使用分层合并：
+settings 的行为取决于克隆模式。
+
+符号链接模式下，settings 使用分层合并：
 
 1. **基础层**：来自源的 `settings.json`（宿主 `~/.claude/` 或其他环境）
 2. **覆盖层**：环境中的 `settings.override.json`（cac 特有覆盖项）
 3. **结果**：合并后的 `settings.json` 写入环境的 `.claude/` 目录
 
-合并在每次 `claude` 启动时自动执行，所以更新基础 settings 后，所有克隆环境会自动同步。
+合并在每次 `claude` 启动时自动执行，所以更新基础 settings 后，符号链接克隆环境会自动同步。
 
 ```
 ~/.claude/settings.json             (共享基础配置)
@@ -91,6 +93,14 @@ cac env create work2 --clone work
 env/.claude/settings.override.json  (cac 覆盖：权限、statusline 等)
     =
 env/.claude/settings.json           (合并结果，自动生成)
+```
+
+使用 `--no-link` 时，cac 只会在创建时执行一次合并，之后不再跟踪源配置。复制出来的环境拥有独立的 `settings.json`，后续修改 `~/.claude/settings.json` 不会影响它。
+
+如果你用旧版本 cac 创建过复制环境，且它仍会同步源 settings，可以手动解除关联：
+
+```bash
+cac env detach work
 ```
 
 ## 典型工作流

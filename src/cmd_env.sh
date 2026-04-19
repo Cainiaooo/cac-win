@@ -29,7 +29,7 @@ _env_cmd_create() {
         esac
     done
 
-    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--telemetry <mode>] [--persona <preset>] [--autoupdate]"
+    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--clone [source]] [--no-link] [--telemetry <mode>] [--persona <preset>] [--autoupdate]"
     [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || _die "invalid name '$name' (use alphanumeric, dash, underscore)"
 
     local env_dir="$ENVS_DIR/$name"
@@ -137,6 +137,10 @@ _env_cmd_create() {
         fi
 
         if [[ -n "$clone_source" ]] && [[ -d "$src_claude_dir" ]]; then
+            local clone_mode="linked"
+            [[ "$clone_link" != "true" ]] && clone_mode="copied"
+            echo "$clone_mode" > "$env_dir/clone_mode"
+
             local clone_dirs="commands hooks skills plugins"
             for d in $clone_dirs; do
                 if [[ -d "$src_claude_dir/$d" ]]; then
@@ -157,19 +161,32 @@ _env_cmd_create() {
                 fi
             fi
             if [[ -f "$src_claude_dir/settings.json" ]]; then
-                cp "$env_dir/.claude/settings.json" "$env_dir/.claude/settings.override.json"
-                node -e "
+                if [[ "$clone_link" == "true" ]]; then
+                    cp "$env_dir/.claude/settings.json" "$env_dir/.claude/settings.override.json"
+                    node -e "
 const fs=require('fs');
 const base=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));
 const override=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 function merge(b,o){const r={...b};for(const[k,v]of Object.entries(o)){if(k in r&&typeof r[k]==='object'&&r[k]!==null&&typeof v==='object'&&v!==null&&!Array.isArray(r[k])&&!Array.isArray(v)){r[k]=merge(r[k],v)}else{r[k]=v}}return r}
 fs.writeFileSync(process.argv[3],JSON.stringify(merge(base,override),null,2));
 " "$src_claude_dir/settings.json" "$env_dir/.claude/settings.override.json" "$env_dir/.claude/settings.json"
+                    echo "$src_claude_dir" > "$env_dir/clone_source"
+                else
+                    local _tmp_override
+                    _tmp_override=$(mktemp)
+                    cp "$env_dir/.claude/settings.json" "$_tmp_override"
+                    node -e "
+const fs=require('fs');
+const base=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));
+const override=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+function merge(b,o){const r={...b};for(const[k,v]of Object.entries(o)){if(k in r&&typeof r[k]==='object'&&r[k]!==null&&typeof v==='object'&&v!==null&&!Array.isArray(r[k])&&!Array.isArray(v)){r[k]=merge(r[k],v)}else{r[k]=v}}return r}
+fs.writeFileSync(process.argv[3],JSON.stringify(merge(base,override),null,2));
+" "$src_claude_dir/settings.json" "$_tmp_override" "$env_dir/.claude/settings.json"
+                    rm -f "$_tmp_override"
+                fi
             fi
-            # Store clone source for wrapper merge-on-startup
-            echo "$src_claude_dir" > "$env_dir/clone_source"
-            local link_mode="symlinked"
-            [[ "$clone_link" != "true" ]] && link_mode="copied"
+            local link_mode="linked (synced)"
+            [[ "$clone_link" != "true" ]] && link_mode="copied (independent)"
             echo "  $(_green "+") cloned   from ${src_claude_dir/#$HOME/~} ($link_mode)"
         fi
     fi
@@ -262,6 +279,24 @@ _env_cmd_rm() {
 
     rm -rf "${ENVS_DIR:?}/$name"
     echo "$(_green_bold "Removed") environment $(_cyan "$name")"
+}
+
+_env_cmd_detach() {
+    _require_setup
+    [[ -n "${1:-}" ]] || _die "usage: cac env detach <name>"
+    local name="$1"
+    _require_env "$name"
+    local env_dir="$ENVS_DIR/$name"
+
+    if [[ ! -f "$env_dir/clone_source" ]] && [[ ! -f "$env_dir/.claude/settings.override.json" ]]; then
+        echo "$(_dim "Environment '$name' is already detached.")"
+        echo "copied" > "$env_dir/clone_mode"
+        return
+    fi
+
+    rm -f "$env_dir/clone_source" "$env_dir/.claude/settings.override.json"
+    echo "copied" > "$env_dir/clone_mode"
+    echo "$(_green_bold "Detached") $(_bold "$name") $(_dim "from clone source; settings are now independent.")"
 }
 
 _env_cmd_activate() {
@@ -457,6 +492,7 @@ cmd_env() {
     case "${1:-help}" in
         create)       _env_cmd_create "${@:2}" ;;
         set)          _env_cmd_set "${@:2}" ;;
+        detach)       _env_cmd_detach "${@:2}" ;;
         ls|list)      _env_cmd_ls ;;
         rm|remove)    _env_cmd_rm "${@:2}" ;;
         activate)     _env_cmd_activate "${@:2}" ;;
@@ -467,10 +503,12 @@ cmd_env() {
             echo
             echo "  $(_bold "cac env") — environment management"
             echo
-            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--telemetry mode] [--persona preset] [--autoupdate]"
+            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--clone [source]] [--no-link]"
+            echo "                             [--telemetry mode] [--persona preset] [--autoupdate]"
             echo "                             Create isolated environment (auto-activates)"
             echo "    $(_green "set") [name] <key> <value>        Modify environment"
             echo "                             proxy, version, telemetry, persona, autoupdate, tz, or lang"
+            echo "    $(_green "detach") <name>   Stop cloned settings from syncing with the source"
             echo "    $(_green "ls")              List all environments"
             echo "    $(_green "rm") <name>       Remove an environment"
             echo "    $(_green "check")           Verify current environment"
