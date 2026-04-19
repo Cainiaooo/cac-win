@@ -30,7 +30,11 @@ cmd_check() {
 
     # ── header (neutral, no pass/fail yet) ──
     echo
-    echo "  $(_bold "$current") $(_dim "(claude $ver)")"
+    if [[ -n "${CAC_ACTIVE_ENV:-}" ]] && { [[ ! -f "$CAC_DIR/current" ]] || [[ "$(tr -d '[:space:]' < "$CAC_DIR/current")" != "$current" ]]; }; then
+        echo "  $(_bold "$current") $(_dim "(claude $ver)") $(_yellow "session")"
+    else
+        echo "  $(_bold "$current") $(_dim "(claude $ver)")"
+    fi
     echo
 
     # ── wrapper check (instant) ──

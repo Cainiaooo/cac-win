@@ -11,7 +11,7 @@ cmd_help() {
     echo "    $(_green "cac env ls")                  List all environments"
     echo "    $(_green "cac env rm") <name>           Remove an environment"
     echo "    $(_green "cac env check")               Verify current environment"
-    echo "    $(_green "cac") <name>                  Switch environment"
+    echo "    $(_green "cac") <name> [--session]      Switch environment (--session: this terminal only)"
     echo
 
     echo "  $(_bold "Version")"
@@ -36,5 +36,6 @@ cmd_help() {
     echo "    $(_dim "cac env create work -p 1.2.3.4:1080:u:p -c 2.1.81")"
     echo "    $(_dim "cac env create personal")"
     echo "    $(_dim "cac work")"
+    echo "    $(_dim "cac work --session")"
     echo
 }

@@ -197,7 +197,13 @@ _auto_detect_proxy() {
     return 1
 }
 
-_current_env()  { _read "$CAC_DIR/current"; }
+_current_env()  {
+    if [[ -n "${CAC_ACTIVE_ENV:-}" ]]; then
+        echo "$CAC_ACTIVE_ENV"
+    else
+        _read "$CAC_DIR/current"
+    fi
+}
 _env_dir()      { echo "$ENVS_DIR/$1"; }
 
 # ── Version management helpers ────────────────────────────────────
@@ -414,9 +420,15 @@ _write_path_to_rc() {
         return 0
     fi
 
-    if grep -q '# >>> cac >>>' "$rc_file" 2>/dev/null; then
+    if grep -q '# >>> cac — Claude Code Cloak >>>' "$rc_file" 2>/dev/null; then
+        # Already up-to-date: new format with session handshake
         echo "  ✓ PATH already exists in $rc_file, skipping"
         return 0
+    fi
+
+    # Old format without session handshake: remove and rewrite
+    if grep -q '# >>> cac >>>' "$rc_file" 2>/dev/null; then
+        _remove_path_from_rc "$rc_file"
     fi
 
     # Compat: remove old format if present
@@ -435,6 +447,15 @@ cac() {
     [[ -z "$_cac_bin" ]] && { echo "[cac] error: cac binary not found in PATH" >&2; return 1; }
     command "$_cac_bin" "$@"
     local _rc=$?
+    # session handshake: binary writes ~/.cac/.session_env, shell function exports and cleans up
+    if [[ -f "$HOME/.cac/.session_env" ]]; then
+        export CAC_ACTIVE_ENV=$(tr -d '[:space:]' < "$HOME/.cac/.session_env")
+        rm -f "$HOME/.cac/.session_env"
+    elif [[ -f "$HOME/.cac/current" ]]; then
+        export CAC_ACTIVE_ENV=$(tr -d '[:space:]' < "$HOME/.cac/current")
+    else
+        unset CAC_ACTIVE_ENV
+    fi
     PATH=$(echo "$PATH" | tr ':' '\n' | grep -v '\.cac/bin' | tr '\n' ':' | sed 's/:$//')
     export PATH="$HOME/.cac/bin:$PATH"
     return $_rc
@@ -443,6 +464,53 @@ cac() {
 CACEOF
     echo "  ✓ PATH written to $rc_file"
     return 0
+}
+
+_write_path_to_ps_profile() {
+    case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) ;; *) return 0 ;; esac
+
+    local ps_profile_dir ps_profile
+    ps_profile_dir="$(cygpath "$USERPROFILE/Documents/WindowsPowerShell" 2>/dev/null || echo "$USERPROFILE/Documents/WindowsPowerShell")"
+    ps_profile="$ps_profile_dir/Microsoft.PowerShell_profile.ps1"
+
+    # Also try PowerShell Core profile
+    if [[ ! -d "$ps_profile_dir" ]]; then
+        ps_profile_dir="$(cygpath "$USERPROFILE/Documents/PowerShell" 2>/dev/null || echo "$USERPROFILE/Documents/PowerShell")"
+        ps_profile="$ps_profile_dir/Microsoft.PowerShell_profile.ps1"
+    fi
+
+    [[ -d "$ps_profile_dir" ]] || mkdir -p "$ps_profile_dir" 2>/dev/null || return 0
+
+    # Idempotent: skip if already present
+    if [[ -f "$ps_profile" ]] && grep -q '# >>> cac — Claude Code Cloak >>>' "$ps_profile" 2>/dev/null; then
+        echo "  ✓ cac function already in $ps_profile, skipping"
+        return 0
+    fi
+
+    cat >> "$ps_profile" << 'PSEOF'
+
+# >>> cac — Claude Code Cloak >>>
+function cac {
+    $cacScriptDir = Join-Path $env:USERPROFILE ".cac\bin"
+    $cacPs1 = Join-Path $cacScriptDir "cac.ps1"
+    $cacCmd = Join-Path $cacScriptDir "cac.cmd"
+    if (Test-Path $cacPs1) { & $cacPs1 @args }
+    elseif (Test-Path $cacCmd) { & $cacCmd @args }
+    else { Write-Error "[cac] cac not found in $cacScriptDir"; return 1 }
+    $sessionFile = Join-Path $env:USERPROFILE ".cac\.session_env"
+    $currentFile = Join-Path $env:USERPROFILE ".cac\current"
+    if (Test-Path $sessionFile) {
+        $env:CAC_ACTIVE_ENV = (Get-Content $sessionFile -Raw).Trim()
+        Remove-Item $sessionFile -Force
+    } elseif (Test-Path $currentFile) {
+        $env:CAC_ACTIVE_ENV = (Get-Content $currentFile -Raw).Trim()
+    } else {
+        Remove-Item Env:\CAC_ACTIVE_ENV -ErrorAction SilentlyContinue
+    }
+}
+# <<< cac — Claude Code Cloak <<<
+PSEOF
+    echo "  ✓ cac function written to $ps_profile"
 }
 
 _remove_path_from_rc() {
@@ -1363,11 +1431,16 @@ if [[ -f "$CAC_DIR/stopped" ]]; then
     echo "[cac] error: real claude not found, reinstall with 'npm i -g claude-cac'" >&2; exit 1
 fi
 
-# read current environment
-if [[ ! -f "$CAC_DIR/current" ]]; then
+# read current environment: session env var takes priority over persistent file
+_name=""
+if [[ -n "${CAC_ACTIVE_ENV:-}" ]]; then
+    _name="$CAC_ACTIVE_ENV"
+elif [[ -f "$CAC_DIR/current" ]]; then
+    _name=$(tr -d '[:space:]' < "$CAC_DIR/current")
+fi
+if [[ -z "$_name" ]]; then
     echo "[cac] error: no active environment, run 'cac <name>'" >&2; exit 1
 fi
-_name=$(tr -d '[:space:]' < "$CAC_DIR/current")
 _env_dir="$ENVS_DIR/$_name"
 [[ -d "$_env_dir" ]] || { echo "[cac] error: environment '$_name' not found" >&2; exit 1; }
 
@@ -1783,7 +1856,8 @@ if ! echo "$*" | grep -q "IOPlatformExpertDevice"; then
 fi
 
 # read current env UUID
-_uuid_file="$CAC_DIR/envs/$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)/uuid"
+_cac_env="${CAC_ACTIVE_ENV:-$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)}"
+_uuid_file="$CAC_DIR/envs/$_cac_env/uuid"
 if [[ ! -f "$_uuid_file" ]]; then
     _real=$(PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "$CAC_DIR/shim-bin" | tr '\n' ':') \
             command -v ioreg 2>/dev/null || true)
@@ -1817,7 +1891,8 @@ _real=$(PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "$CAC_DIR/shim-bin" | tr '\n
 
 # intercept /etc/machine-id and /var/lib/dbus/machine-id
 if [[ "$1" == "/etc/machine-id" ]] || [[ "$1" == "/var/lib/dbus/machine-id" ]]; then
-    _mid_file="$CAC_DIR/envs/$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)/machine_id"
+    _cac_env="${CAC_ACTIVE_ENV:-$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)}"
+    _mid_file="$CAC_DIR/envs/$_cac_env/machine_id"
     if [[ -f "$_mid_file" ]] && [[ -n "$_real" ]]; then
         exec "$_real" "$_mid_file"
     fi
@@ -1837,7 +1912,8 @@ _write_hostname_shim() {
 CAC_DIR="$HOME/.cac"
 
 # read spoofed hostname
-_hn_file="$CAC_DIR/envs/$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)/hostname"
+_cac_env="${CAC_ACTIVE_ENV:-$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)}"
+_hn_file="$CAC_DIR/envs/$_cac_env/hostname"
 if [[ -f "$_hn_file" ]]; then
     tr -d '[:space:]' < "$_hn_file"
     exit 0
@@ -1859,7 +1935,8 @@ CAC_DIR="$HOME/.cac"
 
 _real=$(PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "$CAC_DIR/shim-bin" | tr '\n' ':') command -v ifconfig 2>/dev/null || true)
 
-_mac_file="$CAC_DIR/envs/$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)/mac_address"
+_cac_env="${CAC_ACTIVE_ENV:-$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)}"
+_mac_file="$CAC_DIR/envs/$_cac_env/mac_address"
 if [[ -f "$_mac_file" ]] && [[ -n "$_real" ]]; then
     FAKE_MAC=$(tr -d '[:space:]' < "$_mac_file")
     "$_real" "$@" | sed "s/ether [0-9a-f:]\{17\}/ether $FAKE_MAC/g" && exit 0
@@ -1932,6 +2009,8 @@ fs.writeFileSync(fpath,JSON.stringify(d,null,2)+'\n');
     # PATH (idempotent — always ensure it's in rc file)
     local rc_file; rc_file=$(_detect_rc_file)
     _write_path_to_rc "$rc_file" >/dev/null 2>&1 || true
+    # Windows: also ensure PowerShell profile has cac function
+    _write_path_to_ps_profile >/dev/null 2>&1 || true
 
     # Keep .latest pointing to highest installed version
     _update_latest 2>/dev/null || true
@@ -1997,7 +2076,7 @@ fs.writeFileSync(fpath,JSON.stringify(d,null,2)+'\n');
 
 _env_cmd_create() {
     _require_setup
-    local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true persona="" claude_auto_update=false
+    local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true persona="" claude_auto_update=false session=false
     # Windows: force copy mode (NTFS symlinks require admin privileges)
     case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) clone_link=false ;; esac
 
@@ -2019,6 +2098,7 @@ _env_cmd_create() {
             --autoupdate|--auto-update) claude_auto_update=true; shift ;;
             --clone)     shift; if [[ -n "${1:-}" ]] && [[ "${1:-}" != -* ]]; then clone_source="$1"; shift; else clone_source="host"; fi ;;
             --no-link)   clone_link=false; shift ;;
+            --session|-s) session=true; shift ;;
             -*)          _die "unknown option: $1" ;;
             *)           [[ -z "$name" ]] && name="$1" || _die "extra argument: $1"; shift ;;
         esac
@@ -2172,8 +2252,12 @@ fs.writeFileSync(process.argv[3],JSON.stringify(merge(base,override),null,2));
     _generate_client_cert "$name" >/dev/null 2>&1 || true
 
     # Auto-activate
-    echo "$name" > "$CAC_DIR/current"
-    rm -f "$CAC_DIR/stopped"
+    if [[ "$session" == "true" ]]; then
+        echo "$name" > "$CAC_DIR/.session_env"
+    else
+        echo "$name" > "$CAC_DIR/current"
+        rm -f "$CAC_DIR/stopped"
+    fi
     if [[ -d "$env_dir/.claude" ]]; then
         export CLAUDE_CONFIG_DIR="$env_dir/.claude"
     fi
@@ -2261,7 +2345,15 @@ _env_cmd_rm() {
 
 _env_cmd_activate() {
     _require_setup
-    local name="$1"
+    local name="" session=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --session|-s) session=true; shift ;;
+            -*)           _die "unknown option: $1 (did you mean --session?)" ;;
+            *)            [[ -z "$name" ]] && name="$1" || _die "unexpected argument: $1"; shift ;;
+        esac
+    done
+    [[ -n "$name" ]] || _die "usage: cac <name> [--session]"
     _require_env "$name"
     local env_dir="$ENVS_DIR/$name"
 
@@ -2269,8 +2361,12 @@ _env_cmd_activate() {
 
     _timer_start
 
-    echo "$name" > "$CAC_DIR/current"
-    rm -f "$CAC_DIR/stopped"
+    if [[ "$session" == "true" ]]; then
+        echo "$name" > "$CAC_DIR/.session_env"
+    else
+        echo "$name" > "$CAC_DIR/current"
+        rm -f "$CAC_DIR/stopped"
+    fi
 
     if [[ -d "$env_dir/.claude" ]]; then
         export CLAUDE_CONFIG_DIR="$env_dir/.claude"
@@ -2294,7 +2390,11 @@ _env_cmd_activate() {
     fi
 
     local elapsed; elapsed=$(_timer_elapsed)
-    echo "$(_green_bold "Activated") $(_bold "$name") $(_dim "in $elapsed")"
+    if [[ "$session" == "true" ]]; then
+        echo "$(_green_bold "Activated") $(_bold "$name") $(_dim "(session-only, this terminal)") $(_dim "in $elapsed")"
+    else
+        echo "$(_green_bold "Activated") $(_bold "$name") $(_dim "in $elapsed")"
+    fi
 }
 
 _env_cmd_set() {
@@ -2755,7 +2855,11 @@ cmd_check() {
 
     # ── header (neutral, no pass/fail yet) ──
     echo
-    echo "  $(_bold "$current") $(_dim "(claude $ver)")"
+    if [[ -n "${CAC_ACTIVE_ENV:-}" ]] && { [[ ! -f "$CAC_DIR/current" ]] || [[ "$(tr -d '[:space:]' < "$CAC_DIR/current")" != "$current" ]]; }; then
+        echo "  $(_bold "$current") $(_dim "(claude $ver)") $(_yellow "session")"
+    else
+        echo "  $(_bold "$current") $(_dim "(claude $ver)")"
+    fi
     echo
 
     # ── wrapper check (instant) ──
@@ -4157,7 +4261,7 @@ cmd_help() {
     echo "    $(_green "cac env ls")                  List all environments"
     echo "    $(_green "cac env rm") <name>           Remove an environment"
     echo "    $(_green "cac env check")               Verify current environment"
-    echo "    $(_green "cac") <name>                  Switch environment"
+    echo "    $(_green "cac") <name> [--session]      Switch environment (--session: this terminal only)"
     echo
 
     echo "  $(_bold "Version")"
@@ -4182,6 +4286,7 @@ cmd_help() {
     echo "    $(_dim "cac env create work -p 1.2.3.4:1080:u:p -c 2.1.81")"
     echo "    $(_dim "cac env create personal")"
     echo "    $(_dim "cac work")"
+    echo "    $(_dim "cac work --session")"
     echo
 }
 
@@ -4206,6 +4311,6 @@ case "$1" in
     resume|-c)          echo "$(_yellow "warning:") 'cac resume' removed — use 'cac env activate <name>'" >&2; exit 1 ;;
     relay)              echo "$(_yellow "warning:") relay is now automatic (TUN auto-detected)" >&2 ;;
     delete|uninstall)   echo "$(_yellow "warning:") 'cac delete' → 'cac self delete'" >&2; cmd_delete ;;
-    *)                  _env_cmd_activate "$1" ;;
+    *)                  _env_cmd_activate "$@" ;;
 esac
 

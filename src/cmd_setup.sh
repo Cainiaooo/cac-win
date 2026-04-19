@@ -58,6 +58,8 @@ fs.writeFileSync(fpath,JSON.stringify(d,null,2)+'\n');
     # PATH (idempotent — always ensure it's in rc file)
     local rc_file; rc_file=$(_detect_rc_file)
     _write_path_to_rc "$rc_file" >/dev/null 2>&1 || true
+    # Windows: also ensure PowerShell profile has cac function
+    _write_path_to_ps_profile >/dev/null 2>&1 || true
 
     # Keep .latest pointing to highest installed version
     _update_latest 2>/dev/null || true

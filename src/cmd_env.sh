@@ -2,7 +2,7 @@
 
 _env_cmd_create() {
     _require_setup
-    local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true persona="" claude_auto_update=false
+    local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true persona="" claude_auto_update=false session=false
     # Windows: force copy mode (NTFS symlinks require admin privileges)
     case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) clone_link=false ;; esac
 
@@ -24,6 +24,7 @@ _env_cmd_create() {
             --autoupdate|--auto-update) claude_auto_update=true; shift ;;
             --clone)     shift; if [[ -n "${1:-}" ]] && [[ "${1:-}" != -* ]]; then clone_source="$1"; shift; else clone_source="host"; fi ;;
             --no-link)   clone_link=false; shift ;;
+            --session|-s) session=true; shift ;;
             -*)          _die "unknown option: $1" ;;
             *)           [[ -z "$name" ]] && name="$1" || _die "extra argument: $1"; shift ;;
         esac
@@ -177,8 +178,12 @@ fs.writeFileSync(process.argv[3],JSON.stringify(merge(base,override),null,2));
     _generate_client_cert "$name" >/dev/null 2>&1 || true
 
     # Auto-activate
-    echo "$name" > "$CAC_DIR/current"
-    rm -f "$CAC_DIR/stopped"
+    if [[ "$session" == "true" ]]; then
+        echo "$name" > "$CAC_DIR/.session_env"
+    else
+        echo "$name" > "$CAC_DIR/current"
+        rm -f "$CAC_DIR/stopped"
+    fi
     if [[ -d "$env_dir/.claude" ]]; then
         export CLAUDE_CONFIG_DIR="$env_dir/.claude"
     fi
@@ -266,7 +271,15 @@ _env_cmd_rm() {
 
 _env_cmd_activate() {
     _require_setup
-    local name="$1"
+    local name="" session=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --session|-s) session=true; shift ;;
+            -*)           _die "unknown option: $1 (did you mean --session?)" ;;
+            *)            [[ -z "$name" ]] && name="$1" || _die "unexpected argument: $1"; shift ;;
+        esac
+    done
+    [[ -n "$name" ]] || _die "usage: cac <name> [--session]"
     _require_env "$name"
     local env_dir="$ENVS_DIR/$name"
 
@@ -274,8 +287,12 @@ _env_cmd_activate() {
 
     _timer_start
 
-    echo "$name" > "$CAC_DIR/current"
-    rm -f "$CAC_DIR/stopped"
+    if [[ "$session" == "true" ]]; then
+        echo "$name" > "$CAC_DIR/.session_env"
+    else
+        echo "$name" > "$CAC_DIR/current"
+        rm -f "$CAC_DIR/stopped"
+    fi
 
     if [[ -d "$env_dir/.claude" ]]; then
         export CLAUDE_CONFIG_DIR="$env_dir/.claude"
@@ -299,7 +316,11 @@ _env_cmd_activate() {
     fi
 
     local elapsed; elapsed=$(_timer_elapsed)
-    echo "$(_green_bold "Activated") $(_bold "$name") $(_dim "in $elapsed")"
+    if [[ "$session" == "true" ]]; then
+        echo "$(_green_bold "Activated") $(_bold "$name") $(_dim "(session-only, this terminal)") $(_dim "in $elapsed")"
+    else
+        echo "$(_green_bold "Activated") $(_bold "$name") $(_dim "in $elapsed")"
+    fi
 }
 
 _env_cmd_set() {

@@ -267,11 +267,16 @@ if [[ -f "$CAC_DIR/stopped" ]]; then
     echo "[cac] error: real claude not found, reinstall with 'npm i -g claude-cac'" >&2; exit 1
 fi
 
-# read current environment
-if [[ ! -f "$CAC_DIR/current" ]]; then
+# read current environment: session env var takes priority over persistent file
+_name=""
+if [[ -n "${CAC_ACTIVE_ENV:-}" ]]; then
+    _name="$CAC_ACTIVE_ENV"
+elif [[ -f "$CAC_DIR/current" ]]; then
+    _name=$(tr -d '[:space:]' < "$CAC_DIR/current")
+fi
+if [[ -z "$_name" ]]; then
     echo "[cac] error: no active environment, run 'cac <name>'" >&2; exit 1
 fi
-_name=$(tr -d '[:space:]' < "$CAC_DIR/current")
 _env_dir="$ENVS_DIR/$_name"
 [[ -d "$_env_dir" ]] || { echo "[cac] error: environment '$_name' not found" >&2; exit 1; }
 
@@ -687,7 +692,8 @@ if ! echo "$*" | grep -q "IOPlatformExpertDevice"; then
 fi
 
 # read current env UUID
-_uuid_file="$CAC_DIR/envs/$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)/uuid"
+_cac_env="${CAC_ACTIVE_ENV:-$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)}"
+_uuid_file="$CAC_DIR/envs/$_cac_env/uuid"
 if [[ ! -f "$_uuid_file" ]]; then
     _real=$(PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "$CAC_DIR/shim-bin" | tr '\n' ':') \
             command -v ioreg 2>/dev/null || true)
@@ -721,7 +727,8 @@ _real=$(PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "$CAC_DIR/shim-bin" | tr '\n
 
 # intercept /etc/machine-id and /var/lib/dbus/machine-id
 if [[ "$1" == "/etc/machine-id" ]] || [[ "$1" == "/var/lib/dbus/machine-id" ]]; then
-    _mid_file="$CAC_DIR/envs/$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)/machine_id"
+    _cac_env="${CAC_ACTIVE_ENV:-$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)}"
+    _mid_file="$CAC_DIR/envs/$_cac_env/machine_id"
     if [[ -f "$_mid_file" ]] && [[ -n "$_real" ]]; then
         exec "$_real" "$_mid_file"
     fi
@@ -741,7 +748,8 @@ _write_hostname_shim() {
 CAC_DIR="$HOME/.cac"
 
 # read spoofed hostname
-_hn_file="$CAC_DIR/envs/$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)/hostname"
+_cac_env="${CAC_ACTIVE_ENV:-$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)}"
+_hn_file="$CAC_DIR/envs/$_cac_env/hostname"
 if [[ -f "$_hn_file" ]]; then
     tr -d '[:space:]' < "$_hn_file"
     exit 0
@@ -763,7 +771,8 @@ CAC_DIR="$HOME/.cac"
 
 _real=$(PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "$CAC_DIR/shim-bin" | tr '\n' ':') command -v ifconfig 2>/dev/null || true)
 
-_mac_file="$CAC_DIR/envs/$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)/mac_address"
+_cac_env="${CAC_ACTIVE_ENV:-$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)}"
+_mac_file="$CAC_DIR/envs/$_cac_env/mac_address"
 if [[ -f "$_mac_file" ]] && [[ -n "$_real" ]]; then
     FAKE_MAC=$(tr -d '[:space:]' < "$_mac_file")
     "$_real" "$@" | sed "s/ether [0-9a-f:]\{17\}/ether $FAKE_MAC/g" && exit 0

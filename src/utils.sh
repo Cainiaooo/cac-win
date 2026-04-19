@@ -187,7 +187,13 @@ _auto_detect_proxy() {
     return 1
 }
 
-_current_env()  { _read "$CAC_DIR/current"; }
+_current_env()  {
+    if [[ -n "${CAC_ACTIVE_ENV:-}" ]]; then
+        echo "$CAC_ACTIVE_ENV"
+    else
+        _read "$CAC_DIR/current"
+    fi
+}
 _env_dir()      { echo "$ENVS_DIR/$1"; }
 
 # ── Version management helpers ────────────────────────────────────
@@ -404,9 +410,15 @@ _write_path_to_rc() {
         return 0
     fi
 
-    if grep -q '# >>> cac >>>' "$rc_file" 2>/dev/null; then
+    if grep -q '# >>> cac — Claude Code Cloak >>>' "$rc_file" 2>/dev/null; then
+        # Already up-to-date: new format with session handshake
         echo "  ✓ PATH already exists in $rc_file, skipping"
         return 0
+    fi
+
+    # Old format without session handshake: remove and rewrite
+    if grep -q '# >>> cac >>>' "$rc_file" 2>/dev/null; then
+        _remove_path_from_rc "$rc_file"
     fi
 
     # Compat: remove old format if present
@@ -425,6 +437,15 @@ cac() {
     [[ -z "$_cac_bin" ]] && { echo "[cac] error: cac binary not found in PATH" >&2; return 1; }
     command "$_cac_bin" "$@"
     local _rc=$?
+    # session handshake: binary writes ~/.cac/.session_env, shell function exports and cleans up
+    if [[ -f "$HOME/.cac/.session_env" ]]; then
+        export CAC_ACTIVE_ENV=$(tr -d '[:space:]' < "$HOME/.cac/.session_env")
+        rm -f "$HOME/.cac/.session_env"
+    elif [[ -f "$HOME/.cac/current" ]]; then
+        export CAC_ACTIVE_ENV=$(tr -d '[:space:]' < "$HOME/.cac/current")
+    else
+        unset CAC_ACTIVE_ENV
+    fi
     PATH=$(echo "$PATH" | tr ':' '\n' | grep -v '\.cac/bin' | tr '\n' ':' | sed 's/:$//')
     export PATH="$HOME/.cac/bin:$PATH"
     return $_rc
@@ -433,6 +454,53 @@ cac() {
 CACEOF
     echo "  ✓ PATH written to $rc_file"
     return 0
+}
+
+_write_path_to_ps_profile() {
+    case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) ;; *) return 0 ;; esac
+
+    local ps_profile_dir ps_profile
+    ps_profile_dir="$(cygpath "$USERPROFILE/Documents/WindowsPowerShell" 2>/dev/null || echo "$USERPROFILE/Documents/WindowsPowerShell")"
+    ps_profile="$ps_profile_dir/Microsoft.PowerShell_profile.ps1"
+
+    # Also try PowerShell Core profile
+    if [[ ! -d "$ps_profile_dir" ]]; then
+        ps_profile_dir="$(cygpath "$USERPROFILE/Documents/PowerShell" 2>/dev/null || echo "$USERPROFILE/Documents/PowerShell")"
+        ps_profile="$ps_profile_dir/Microsoft.PowerShell_profile.ps1"
+    fi
+
+    [[ -d "$ps_profile_dir" ]] || mkdir -p "$ps_profile_dir" 2>/dev/null || return 0
+
+    # Idempotent: skip if already present
+    if [[ -f "$ps_profile" ]] && grep -q '# >>> cac — Claude Code Cloak >>>' "$ps_profile" 2>/dev/null; then
+        echo "  ✓ cac function already in $ps_profile, skipping"
+        return 0
+    fi
+
+    cat >> "$ps_profile" << 'PSEOF'
+
+# >>> cac — Claude Code Cloak >>>
+function cac {
+    $cacScriptDir = Join-Path $env:USERPROFILE ".cac\bin"
+    $cacPs1 = Join-Path $cacScriptDir "cac.ps1"
+    $cacCmd = Join-Path $cacScriptDir "cac.cmd"
+    if (Test-Path $cacPs1) { & $cacPs1 @args }
+    elseif (Test-Path $cacCmd) { & $cacCmd @args }
+    else { Write-Error "[cac] cac not found in $cacScriptDir"; return 1 }
+    $sessionFile = Join-Path $env:USERPROFILE ".cac\.session_env"
+    $currentFile = Join-Path $env:USERPROFILE ".cac\current"
+    if (Test-Path $sessionFile) {
+        $env:CAC_ACTIVE_ENV = (Get-Content $sessionFile -Raw).Trim()
+        Remove-Item $sessionFile -Force
+    } elseif (Test-Path $currentFile) {
+        $env:CAC_ACTIVE_ENV = (Get-Content $currentFile -Raw).Trim()
+    } else {
+        Remove-Item Env:\CAC_ACTIVE_ENV -ErrorAction SilentlyContinue
+    }
+}
+# <<< cac — Claude Code Cloak <<<
+PSEOF
+    echo "  ✓ cac function written to $ps_profile"
 }
 
 _remove_path_from_rc() {

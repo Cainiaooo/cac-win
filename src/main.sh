@@ -18,5 +18,5 @@ case "$1" in
     resume|-c)          echo "$(_yellow "warning:") 'cac resume' removed — use 'cac env activate <name>'" >&2; exit 1 ;;
     relay)              echo "$(_yellow "warning:") relay is now automatic (TUN auto-detected)" >&2 ;;
     delete|uninstall)   echo "$(_yellow "warning:") 'cac delete' → 'cac self delete'" >&2; cmd_delete ;;
-    *)                  _env_cmd_activate "$1" ;;
+    *)                  _env_cmd_activate "$@" ;;
 esac
