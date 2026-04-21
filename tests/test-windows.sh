@@ -285,6 +285,59 @@ ENVS_DIR="$old_envs_dir"
 VERSIONS_DIR="$old_versions_dir"
 rm -rf "$tmp_home" "$tmp_cac"
 
+# ── T21: fingerprint hook runtime locale/timezone spoof ──
+echo ""
+echo "[T21] fingerprint hook runtime locale/timezone spoof"
+grep -q 'export CAC_TZ=' "$PROJECT_DIR/src/templates.sh" && pass "wrapper 导出 CAC_TZ" || fail "wrapper 未导出 CAC_TZ"
+grep -q 'export LC_ALL=' "$PROJECT_DIR/src/templates.sh" && pass "wrapper 导出 LC_ALL" || fail "wrapper 未导出 LC_ALL"
+hook_output=$(CAC_TZ="America/New_York" CAC_LANG="en_US.UTF-8" node -r "$PROJECT_DIR/src/fingerprint-hook.js" -e "
+const d = new Date('2026-01-01T12:00:00Z');
+const ro = Intl.DateTimeFormat().resolvedOptions();
+const roEmpty = Intl.DateTimeFormat([]).resolvedOptions();
+const actual = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+const actualEmpty = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+const expected = new Intl.DateTimeFormat('en-US', {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+  timeZone: 'America/New_York',
+}).format(d);
+process.stdout.write(JSON.stringify({
+  tz: ro.timeZone || '',
+  locale: ro.locale || '',
+  emptyTz: roEmpty.timeZone || '',
+  emptyLocale: roEmpty.locale || '',
+  actual,
+  actualEmpty,
+  expected,
+  stringValue: d.toString(),
+  timeString: d.toTimeString(),
+}));
+" 2>/dev/null || true)
+hook_status=$(printf '%s' "$hook_output" | node -e "
+const fs = require('fs');
+try {
+  const d = JSON.parse(fs.readFileSync(0, 'utf8'));
+  const localeOk = (v) => v === 'en-US' || v.startsWith('en-US-');
+  const stringOk = /GMT-0500/.test(d.stringValue) && /GMT-0500/.test(d.timeString);
+  process.stdout.write(
+    d.tz === 'America/New_York' &&
+    localeOk(d.locale) &&
+    d.emptyTz === 'America/New_York' &&
+    localeOk(d.emptyLocale) &&
+    d.actual === d.expected &&
+    d.actualEmpty === d.expected &&
+    stringOk
+      ? 'ok'
+      : JSON.stringify(d)
+  );
+} catch (_) {
+  process.stdout.write('parse-fail');
+}
+" 2>/dev/null || true)
+[[ "$hook_status" == "ok" ]] && pass "hook 覆盖默认与空 locale 参数并伪装 Date 字符串" || fail "hook 未完整覆盖 Intl/Date: $hook_status"
+
 # ── 总结 ──
 echo ""
 echo "════════════════════════════════════════════════════════"

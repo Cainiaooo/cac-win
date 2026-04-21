@@ -473,8 +473,16 @@ fi
 # ensure CA cert is always trusted (required for mTLS)
 [[ -f "$CAC_DIR/ca/ca_cert.pem" ]] && export NODE_EXTRA_CA_CERTS="$(_native_path "$CAC_DIR/ca/ca_cert.pem")"
 
-[[ -f "$_env_dir/tz" ]]   && export TZ=$(tr -d '[:space:]' < "$_env_dir/tz")
-[[ -f "$_env_dir/lang" ]] && export LANG=$(tr -d '[:space:]' < "$_env_dir/lang")
+if [[ -f "$_env_dir/tz" ]]; then
+    export TZ=$(tr -d '[:space:]' < "$_env_dir/tz")
+    export CAC_TZ="$TZ"
+fi
+if [[ -f "$_env_dir/lang" ]]; then
+    export LANG=$(tr -d '[:space:]' < "$_env_dir/lang")
+    export LC_ALL="$LANG" LC_MESSAGES="$LANG" LC_TIME="$LANG"
+    export CAC_LANG="$LANG"
+    export LANGUAGE="${LANG%%.*}"
+fi
 if [[ -f "$_env_dir/hostname" ]]; then
     _hn=$(tr -d '[:space:]' < "$_env_dir/hostname")
     export HOSTNAME="$_hn" CAC_HOSTNAME="$_hn"
