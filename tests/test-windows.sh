@@ -293,7 +293,9 @@ grep -q 'export LC_ALL=' "$PROJECT_DIR/src/templates.sh" && pass "wrapper 导出
 hook_output=$(CAC_TZ="America/New_York" CAC_LANG="en_US.UTF-8" node -r "$PROJECT_DIR/src/fingerprint-hook.js" -e "
 const d = new Date('2026-01-01T12:00:00Z');
 const ro = Intl.DateTimeFormat().resolvedOptions();
+const roEmpty = Intl.DateTimeFormat([]).resolvedOptions();
 const actual = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+const actualEmpty = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 const expected = new Intl.DateTimeFormat('en-US', {
   hour: '2-digit',
   minute: '2-digit',
@@ -304,21 +306,37 @@ const expected = new Intl.DateTimeFormat('en-US', {
 process.stdout.write(JSON.stringify({
   tz: ro.timeZone || '',
   locale: ro.locale || '',
+  emptyTz: roEmpty.timeZone || '',
+  emptyLocale: roEmpty.locale || '',
   actual,
+  actualEmpty,
   expected,
+  stringValue: d.toString(),
+  timeString: d.toTimeString(),
 }));
 " 2>/dev/null || true)
 hook_status=$(printf '%s' "$hook_output" | node -e "
 const fs = require('fs');
 try {
   const d = JSON.parse(fs.readFileSync(0, 'utf8'));
-  const localeOk = d.locale === 'en-US' || d.locale.startsWith('en-US-');
-  process.stdout.write(d.tz === 'America/New_York' && localeOk && d.actual === d.expected ? 'ok' : JSON.stringify(d));
+  const localeOk = (v) => v === 'en-US' || v.startsWith('en-US-');
+  const stringOk = /GMT-0500/.test(d.stringValue) && /GMT-0500/.test(d.timeString);
+  process.stdout.write(
+    d.tz === 'America/New_York' &&
+    localeOk(d.locale) &&
+    d.emptyTz === 'America/New_York' &&
+    localeOk(d.emptyLocale) &&
+    d.actual === d.expected &&
+    d.actualEmpty === d.expected &&
+    stringOk
+      ? 'ok'
+      : JSON.stringify(d)
+  );
 } catch (_) {
   process.stdout.write('parse-fail');
 }
 " 2>/dev/null || true)
-[[ "$hook_status" == "ok" ]] && pass "hook 覆盖 Intl/Date 默认时区与 locale" || fail "hook 未覆盖 Intl/Date: $hook_status"
+[[ "$hook_status" == "ok" ]] && pass "hook 覆盖默认与空 locale 参数并伪装 Date 字符串" || fail "hook 未完整覆盖 Intl/Date: $hook_status"
 
 # ── 总结 ──
 echo ""

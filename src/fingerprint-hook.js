@@ -36,6 +36,10 @@ function localeToLanguage(locale) {
   return normalized ? normalized.split('-')[0] : '';
 }
 
+function isDefaultLocaleArg(locales) {
+  return locales == null || locales === '' || (Array.isArray(locales) && locales.length === 0);
+}
+
 const fakeTimeZone = firstNonEmpty(process.env.CAC_TZ, process.env.TZ);
 const fakeLocale = normalizeLocale(
   firstNonEmpty(
@@ -52,7 +56,7 @@ function mergeDateTimeArgs(locales, options) {
   let nextLocales = locales;
   let nextOptions = options;
 
-  if ((nextLocales == null || nextLocales === '') && fakeLocale) {
+  if (isDefaultLocaleArg(nextLocales) && fakeLocale) {
     nextLocales = fakeLocale;
   }
   if (fakeTimeZone && (!nextOptions || nextOptions.timeZone == null)) {
@@ -133,6 +137,38 @@ function getSpoofedTimezoneOffset(date, timeZone) {
   return Math.round((date.getTime() - asUtc) / 60000);
 }
 
+function formatGmtOffset(offsetMinutes) {
+  const sign = offsetMinutes <= 0 ? '+' : '-';
+  const abs = Math.abs(offsetMinutes);
+  const hours = String(Math.floor(abs / 60)).padStart(2, '0');
+  const minutes = String(abs % 60).padStart(2, '0');
+  return 'GMT' + sign + hours + minutes;
+}
+
+function getSpoofedDateParts(date, timeZone) {
+  if (!OriginalDateTimeFormat) throw new Error('Intl.DateTimeFormat unavailable');
+  const formatter = new OriginalDateTimeFormat('en-US', {
+    timeZone,
+    weekday: 'short',
+    month: 'short',
+    day: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+    timeZoneName: 'long',
+  });
+  const parts = formatter.formatToParts(date);
+  const values = {};
+  for (const part of parts) {
+    if (part.type !== 'literal') values[part.type] = part.value;
+  }
+  values.gmtOffset = formatGmtOffset(getSpoofedTimezoneOffset(date, timeZone));
+  values.timeZoneName = values.timeZoneName || timeZone;
+  return values;
+}
+
 function defineLocaleGetter(target, key, getter) {
   if (!target) return;
   const desc = Object.getOwnPropertyDescriptor(target, key);
@@ -146,11 +182,37 @@ function defineLocaleGetter(target, key, getter) {
   } catch (_) {}
 }
 
+function patchDateStringMethod(methodName) {
+  const original = Date.prototype[methodName];
+  if (typeof original !== 'function') return;
+  Date.prototype[methodName] = function() {
+    if (!fakeTimeZone) return original.call(this);
+    if (Number.isNaN(this.getTime())) return 'Invalid Date';
+    try {
+      const parts = getSpoofedDateParts(this, fakeTimeZone);
+      if (methodName === 'toDateString') {
+        return parts.weekday + ' ' + parts.month + ' ' + parts.day + ' ' + parts.year;
+      }
+      const timeText = parts.hour + ':' + parts.minute + ':' + parts.second + ' ' + parts.gmtOffset +
+        ' (' + parts.timeZoneName + ')';
+      if (methodName === 'toTimeString') {
+        return timeText;
+      }
+      return parts.weekday + ' ' + parts.month + ' ' + parts.day + ' ' + parts.year + ' ' + timeText;
+    } catch (_) {
+      return original.call(this);
+    }
+  };
+}
+
 if (fakeTimeZone || fakeLocale) {
   patchIntlDateTimeFormat();
   patchDateLocaleMethod('toLocaleString');
   patchDateLocaleMethod('toLocaleDateString');
   patchDateLocaleMethod('toLocaleTimeString');
+  patchDateStringMethod('toDateString');
+  patchDateStringMethod('toTimeString');
+  patchDateStringMethod('toString');
 
   if (fakeTimeZone && typeof Date.prototype.getTimezoneOffset === 'function') {
     const _origGetTimezoneOffset = Date.prototype.getTimezoneOffset;

@@ -2891,16 +2891,26 @@ cmd_check() {
         runtime_probe=$(NODE_OPTIONS="--require $hook_path" CAC_TZ="$expected_tz" CAC_LANG="$expected_lang" \
             node -e "
 function norm(v){v=String(v||'').trim();if(!v)return '';v=v.split(/[,:;]/)[0].trim().replace(/\.UTF-?8$/i,'').replace(/_/g,'-');const p=v.split('-').filter(Boolean);if(!p.length)return '';p[0]=p[0].toLowerCase();if(p[1]&&p[1].length===2)p[1]=p[1].toUpperCase();return p.join('-');}
+function localeOk(actual, expected){return !expected || actual===expected || (actual||'').startsWith(expected + '-u-');}
+function gmt(minutes){const sign=minutes<=0?'+':'-';const abs=Math.abs(minutes);const hh=String(Math.floor(abs/60)).padStart(2,'0');const mm=String(abs%60).padStart(2,'0');return 'GMT' + sign + hh + mm;}
 const tz=process.env.CAC_TZ||'';
 const locale=norm(process.env.CAC_LANG||'');
 const d=new Date('2026-01-01T12:00:00Z');
+const opts={hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false};
 const ro=Intl.DateTimeFormat().resolvedOptions();
-const actual=d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
-const expected=new Intl.DateTimeFormat(ro.locale||undefined,{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false,timeZone:tz}).format(d);
-const localeOk=!locale || ro.locale===locale || (ro.locale||'').startsWith(locale + '-u-');
-const tzOk=!tz || ro.timeZone===tz;
+const emptyRo=Intl.DateTimeFormat([]).resolvedOptions();
+const actual=d.toLocaleTimeString(undefined,opts);
+const emptyActual=d.toLocaleTimeString([],opts);
+const expected=new Intl.DateTimeFormat(ro.locale||locale||undefined,Object.assign({},opts,{timeZone:tz||undefined})).format(d);
+const defaultLocaleOk=localeOk(ro.locale||'',locale);
+const emptyLocaleOk=localeOk(emptyRo.locale||'',locale);
+const defaultTzOk=!tz || ro.timeZone===tz;
+const emptyTzOk=!tz || emptyRo.timeZone===tz;
 const formatOk=!tz || actual===expected;
-process.stdout.write(tzOk && localeOk && formatOk ? 'ok' : JSON.stringify({timeZone:ro.timeZone||'', locale:ro.locale||'', actual, expected}));
+const emptyFormatOk=!tz || emptyActual===expected;
+const stringValue=d.toString();
+const stringOk=!tz || stringValue.includes(gmt(d.getTimezoneOffset()));
+process.stdout.write(defaultTzOk && emptyTzOk && defaultLocaleOk && emptyLocaleOk && formatOk && emptyFormatOk && stringOk ? 'ok' : JSON.stringify({timeZone:ro.timeZone||'', locale:ro.locale||'', emptyTimeZone:emptyRo.timeZone||'', emptyLocale:emptyRo.locale||'', actual, emptyActual, expected, stringValue}));
 " 2>/dev/null || true)
         (( _id_total++ )) || true
         if [[ "$runtime_probe" == "ok" ]]; then
