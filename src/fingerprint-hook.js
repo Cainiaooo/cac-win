@@ -7,6 +7,175 @@ const os = require('os');
 const fs = require('fs');
 const child_process = require('child_process');
 
+function firstNonEmpty() {
+  for (let i = 0; i < arguments.length; i++) {
+    const value = arguments[i];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function normalizeLocale(raw) {
+  if (!raw) return '';
+  let locale = String(raw).trim();
+  if (!locale) return '';
+  locale = locale.split(/[,:;]/)[0].trim();
+  locale = locale.replace(/\.UTF-?8$/i, '');
+  locale = locale.replace(/_/g, '-');
+  const parts = locale.split('-').filter(Boolean);
+  if (parts.length === 0) return '';
+  parts[0] = parts[0].toLowerCase();
+  if (parts[1] && parts[1].length === 2) {
+    parts[1] = parts[1].toUpperCase();
+  }
+  return parts.join('-');
+}
+
+function localeToLanguage(locale) {
+  const normalized = normalizeLocale(locale);
+  return normalized ? normalized.split('-')[0] : '';
+}
+
+const fakeTimeZone = firstNonEmpty(process.env.CAC_TZ, process.env.TZ);
+const fakeLocale = normalizeLocale(
+  firstNonEmpty(
+    process.env.CAC_LANG,
+    process.env.LC_ALL,
+    process.env.LC_MESSAGES,
+    process.env.LC_TIME,
+    process.env.LANG,
+    process.env.LANGUAGE,
+  ),
+);
+
+function mergeDateTimeArgs(locales, options) {
+  let nextLocales = locales;
+  let nextOptions = options;
+
+  if ((nextLocales == null || nextLocales === '') && fakeLocale) {
+    nextLocales = fakeLocale;
+  }
+  if (fakeTimeZone && (!nextOptions || nextOptions.timeZone == null)) {
+    nextOptions = Object.assign({}, nextOptions || {}, { timeZone: fakeTimeZone });
+  }
+  return [nextLocales, nextOptions];
+}
+
+function patchDateLocaleMethod(methodName) {
+  const original = Date.prototype[methodName];
+  if (typeof original !== 'function') return;
+  Date.prototype[methodName] = function(locales, options) {
+    const merged = mergeDateTimeArgs(locales, options);
+    return original.call(this, merged[0], merged[1]);
+  };
+}
+
+const OriginalDateTimeFormat = globalThis.Intl && Intl.DateTimeFormat;
+
+function patchIntlDateTimeFormat() {
+  if (!OriginalDateTimeFormat) return;
+
+  function PatchedDateTimeFormat(locales, options) {
+    const merged = mergeDateTimeArgs(locales, options);
+    if (new.target) {
+      return Reflect.construct(OriginalDateTimeFormat, [merged[0], merged[1]], new.target);
+    }
+    return OriginalDateTimeFormat.call(Intl, merged[0], merged[1]);
+  }
+
+  Object.setPrototypeOf(PatchedDateTimeFormat, OriginalDateTimeFormat);
+  PatchedDateTimeFormat.prototype = OriginalDateTimeFormat.prototype;
+
+  if (typeof OriginalDateTimeFormat.supportedLocalesOf === 'function') {
+    Object.defineProperty(PatchedDateTimeFormat, 'supportedLocalesOf', {
+      configurable: true,
+      enumerable: false,
+      writable: true,
+      value: OriginalDateTimeFormat.supportedLocalesOf.bind(OriginalDateTimeFormat),
+    });
+  }
+
+  try {
+    Object.defineProperty(PatchedDateTimeFormat, 'name', {
+      configurable: true,
+      value: OriginalDateTimeFormat.name,
+    });
+  } catch (_) {}
+
+  Intl.DateTimeFormat = PatchedDateTimeFormat;
+}
+
+function getSpoofedTimezoneOffset(date, timeZone) {
+  if (!OriginalDateTimeFormat) throw new Error('Intl.DateTimeFormat unavailable');
+  const formatter = new OriginalDateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  });
+  const parts = formatter.formatToParts(date);
+  const values = {};
+  for (const part of parts) {
+    if (part.type !== 'literal') values[part.type] = part.value;
+  }
+  const asUtc = Date.UTC(
+    Number(values.year),
+    Number(values.month) - 1,
+    Number(values.day),
+    Number(values.hour),
+    Number(values.minute),
+    Number(values.second),
+  );
+  return Math.round((date.getTime() - asUtc) / 60000);
+}
+
+function defineLocaleGetter(target, key, getter) {
+  if (!target) return;
+  const desc = Object.getOwnPropertyDescriptor(target, key);
+  if (desc && desc.configurable === false) return;
+  try {
+    Object.defineProperty(target, key, {
+      configurable: true,
+      enumerable: desc ? desc.enumerable : true,
+      get: getter,
+    });
+  } catch (_) {}
+}
+
+if (fakeTimeZone || fakeLocale) {
+  patchIntlDateTimeFormat();
+  patchDateLocaleMethod('toLocaleString');
+  patchDateLocaleMethod('toLocaleDateString');
+  patchDateLocaleMethod('toLocaleTimeString');
+
+  if (fakeTimeZone && typeof Date.prototype.getTimezoneOffset === 'function') {
+    const _origGetTimezoneOffset = Date.prototype.getTimezoneOffset;
+    Date.prototype.getTimezoneOffset = function() {
+      try {
+        return getSpoofedTimezoneOffset(this, fakeTimeZone);
+      } catch (_) {
+        return _origGetTimezoneOffset.call(this);
+      }
+    };
+  }
+
+  if (fakeLocale && typeof globalThis.navigator === 'object' && globalThis.navigator) {
+    const languages = [fakeLocale];
+    const baseLanguage = localeToLanguage(fakeLocale);
+    if (baseLanguage && !languages.includes(baseLanguage)) {
+      languages.push(baseLanguage);
+    }
+    defineLocaleGetter(globalThis.navigator, 'language', function() { return fakeLocale; });
+    defineLocaleGetter(globalThis.navigator, 'languages', function() { return languages.slice(); });
+    defineLocaleGetter(globalThis.navigator, 'userLanguage', function() { return fakeLocale; });
+    defineLocaleGetter(globalThis.navigator, 'systemLanguage', function() { return fakeLocale; });
+  }
+}
+
 // --- os.hostname() ---
 const fakeHostname = process.env.CAC_HOSTNAME;
 if (fakeHostname) {

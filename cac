@@ -11,7 +11,7 @@ VERSIONS_DIR="$CAC_DIR/versions"
 # ── utils: colors, read/write, UUID, proxy parsing ───────────────────────
 
 # shellcheck disable=SC2034  # used in build-concatenated cac script
-CAC_VERSION="1.5.7"
+CAC_VERSION="1.5.8"
 
 _read()   { [[ -f "$1" ]] && tr -d '[:space:]' < "$1" || echo "${2:-}"; }
 _die()    { printf '%b\n' "$(_red "error:") $*" >&2; exit 1; }
@@ -1569,8 +1569,16 @@ fi
 # ensure CA cert is always trusted (required for mTLS)
 [[ -f "$CAC_DIR/ca/ca_cert.pem" ]] && export NODE_EXTRA_CA_CERTS="$(_native_path "$CAC_DIR/ca/ca_cert.pem")"
 
-[[ -f "$_env_dir/tz" ]]   && export TZ=$(tr -d '[:space:]' < "$_env_dir/tz")
-[[ -f "$_env_dir/lang" ]] && export LANG=$(tr -d '[:space:]' < "$_env_dir/lang")
+if [[ -f "$_env_dir/tz" ]]; then
+    export TZ=$(tr -d '[:space:]' < "$_env_dir/tz")
+    export CAC_TZ="$TZ"
+fi
+if [[ -f "$_env_dir/lang" ]]; then
+    export LANG=$(tr -d '[:space:]' < "$_env_dir/lang")
+    export LC_ALL="$LANG" LC_MESSAGES="$LANG" LC_TIME="$LANG"
+    export CAC_LANG="$LANG"
+    export LANGUAGE="${LANG%%.*}"
+fi
 if [[ -f "$_env_dir/hostname" ]]; then
     _hn=$(tr -d '[:space:]' < "$_env_dir/hostname")
     export HOSTNAME="$_hn" CAC_HOSTNAME="$_hn"
@@ -2856,12 +2864,16 @@ cmd_check() {
     # ── identity spoofing (consolidated) ──
     local os; os=$(_detect_os)
     local _id_ok=0 _id_total=0 _id_issues=()
+    local hook_path=""
+    local _runtime_intl_ok=false
 
     # fingerprint hook
     local _fp_ok=false
-    if [[ -f "$CAC_DIR/fingerprint-hook.js" ]] && [[ -f "$env_dir/hostname" ]]; then
+    if [[ -f "$CAC_DIR/fingerprint-hook.js" ]]; then
+        hook_path=$(_native_path "$CAC_DIR/fingerprint-hook.js")
+    fi
+    if [[ -n "$hook_path" ]] && [[ -f "$env_dir/hostname" ]]; then
         local expected_hn; expected_hn=$(_read "$env_dir/hostname")
-        local hook_path; hook_path=$(_native_path "$CAC_DIR/fingerprint-hook.js")
         local actual_hn
         actual_hn=$(NODE_OPTIONS="--require $hook_path" CAC_HOSTNAME="$expected_hn" \
             node -e "process.stdout.write(require('os').hostname())" 2>/dev/null || true)
@@ -2870,6 +2882,31 @@ cmd_check() {
             _fp_ok=true; (( _id_ok++ )) || true
         else
             _id_issues+=("fingerprint hook not working")
+        fi
+    fi
+    if [[ -n "$hook_path" ]] && [[ -f "$env_dir/tz" ]]; then
+        local expected_tz expected_lang runtime_probe
+        expected_tz=$(_read "$env_dir/tz" "")
+        expected_lang=$(_read "$env_dir/lang" "")
+        runtime_probe=$(NODE_OPTIONS="--require $hook_path" CAC_TZ="$expected_tz" CAC_LANG="$expected_lang" \
+            node -e "
+function norm(v){v=String(v||'').trim();if(!v)return '';v=v.split(/[,:;]/)[0].trim().replace(/\.UTF-?8$/i,'').replace(/_/g,'-');const p=v.split('-').filter(Boolean);if(!p.length)return '';p[0]=p[0].toLowerCase();if(p[1]&&p[1].length===2)p[1]=p[1].toUpperCase();return p.join('-');}
+const tz=process.env.CAC_TZ||'';
+const locale=norm(process.env.CAC_LANG||'');
+const d=new Date('2026-01-01T12:00:00Z');
+const ro=Intl.DateTimeFormat().resolvedOptions();
+const actual=d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+const expected=new Intl.DateTimeFormat(ro.locale||undefined,{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false,timeZone:tz}).format(d);
+const localeOk=!locale || ro.locale===locale || (ro.locale||'').startsWith(locale + '-u-');
+const tzOk=!tz || ro.timeZone===tz;
+const formatOk=!tz || actual===expected;
+process.stdout.write(tzOk && localeOk && formatOk ? 'ok' : JSON.stringify({timeZone:ro.timeZone||'', locale:ro.locale||'', actual, expected}));
+" 2>/dev/null || true)
+        (( _id_total++ )) || true
+        if [[ "$runtime_probe" == "ok" ]]; then
+            _runtime_intl_ok=true; (( _id_ok++ )) || true
+        else
+            _id_issues+=("runtime locale/timezone not spoofed")
         fi
     fi
     # git email
@@ -3093,6 +3130,7 @@ try {
     if [[ "$verbose" == "true" ]]; then
         echo "  $(_bold "Identity")"
         echo "    $([[ "$_fp_ok" == "true" ]] && _green "✓" || _red "✗") hostname    $(_read "$env_dir/hostname" "—")"
+        echo "    $([[ "$_runtime_intl_ok" == "true" ]] && _green "✓" || _red "✗") runtime     Intl TZ/locale spoof"
         echo "    $([[ -f "$env_dir/git_email" ]] && _green "✓" || _yellow "⚠") git email   $(_read "$env_dir/git_email" "—")"
         echo "    $([[ -f "$env_dir/fake_git_remote" ]] && _green "✓" || _yellow "⚠") repo hash   $(_read "$env_dir/fake_git_remote" "—")"
         echo "    $([[ "$_uid_ok" == "true" ]] && _green "✓" || _yellow "⚠") user_id     $(_read "$env_dir/user_id" "—" | cut -c1-16)..."

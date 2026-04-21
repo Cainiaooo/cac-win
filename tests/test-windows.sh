@@ -285,6 +285,41 @@ ENVS_DIR="$old_envs_dir"
 VERSIONS_DIR="$old_versions_dir"
 rm -rf "$tmp_home" "$tmp_cac"
 
+# ── T21: fingerprint hook runtime locale/timezone spoof ──
+echo ""
+echo "[T21] fingerprint hook runtime locale/timezone spoof"
+grep -q 'export CAC_TZ=' "$PROJECT_DIR/src/templates.sh" && pass "wrapper 导出 CAC_TZ" || fail "wrapper 未导出 CAC_TZ"
+grep -q 'export LC_ALL=' "$PROJECT_DIR/src/templates.sh" && pass "wrapper 导出 LC_ALL" || fail "wrapper 未导出 LC_ALL"
+hook_output=$(CAC_TZ="America/New_York" CAC_LANG="en_US.UTF-8" node -r "$PROJECT_DIR/src/fingerprint-hook.js" -e "
+const d = new Date('2026-01-01T12:00:00Z');
+const ro = Intl.DateTimeFormat().resolvedOptions();
+const actual = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+const expected = new Intl.DateTimeFormat('en-US', {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+  timeZone: 'America/New_York',
+}).format(d);
+process.stdout.write(JSON.stringify({
+  tz: ro.timeZone || '',
+  locale: ro.locale || '',
+  actual,
+  expected,
+}));
+" 2>/dev/null || true)
+hook_status=$(printf '%s' "$hook_output" | node -e "
+const fs = require('fs');
+try {
+  const d = JSON.parse(fs.readFileSync(0, 'utf8'));
+  const localeOk = d.locale === 'en-US' || d.locale.startsWith('en-US-');
+  process.stdout.write(d.tz === 'America/New_York' && localeOk && d.actual === d.expected ? 'ok' : JSON.stringify(d));
+} catch (_) {
+  process.stdout.write('parse-fail');
+}
+" 2>/dev/null || true)
+[[ "$hook_status" == "ok" ]] && pass "hook 覆盖 Intl/Date 默认时区与 locale" || fail "hook 未覆盖 Intl/Date: $hook_status"
+
 # ── 总结 ──
 echo ""
 echo "════════════════════════════════════════════════════════"
