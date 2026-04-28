@@ -402,6 +402,23 @@ out=$(bash -c "source '$PROJECT_DIR/src/utils.sh'; _proxy_host_port 'socks5://1.
     && pass "_proxy_host_port 历史形式: $out" \
     || fail "_proxy_host_port 历史形式失败: $out"
 
+# ── T25: env check 出口 IP 探测全失败时按红色问题处理 ──
+echo ""
+echo "[T25] env check 出口 IP 探测失败语义收紧"
+out=$(grep -n 'exit IP    $(_dim "unable to verify via proxy")' "$PROJECT_DIR/src/cmd_check.sh" || true)
+if [[ -n "$out" ]]; then
+    pass "cmd_check 用 ✗ 表示无法验证的出口 IP"
+else
+    fail "cmd_check 仍使用旧的 ✓ run again 文案"
+fi
+
+out=$(grep -n 'problems+=("exit IP undetected via proxy")' "$PROJECT_DIR/src/cmd_check.sh" || true)
+if [[ -n "$out" ]]; then
+    pass "cmd_check 把出口 IP 失败计入 problems"
+else
+    fail "cmd_check 缺少 exit IP undetected via proxy 的 problems+= 记录"
+fi
+
 # ── 总结 ──
 echo ""
 echo "════════════════════════════════════════════════════════"
