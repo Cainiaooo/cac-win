@@ -68,6 +68,19 @@ _gen_uuid() {
 _new_uuid()    { _gen_uuid | tr '[:lower:]' '[:upper:]'; }
 _new_user_id() { node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" || _die "node required"; }
 _new_machine_id() { _gen_uuid | tr -d '-' | tr '[:upper:]' '[:lower:]'; }
+_new_hostname_suffix() { _gen_uuid | tr -d '-' | tr '[:lower:]' '[:upper:]' | cut -c1-5; }
+_detect_hostname_platform() {
+    local os; os=$(_detect_os)
+    if [[ "$os" == "linux" ]]; then
+        if [[ -n "${WSL_DISTRO_NAME:-}" ]] || [[ -n "${WSL_INTEROP:-}" ]] || \
+           grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null || \
+           uname -r 2>/dev/null | grep -qi microsoft; then
+            echo "windows"
+            return
+        fi
+    fi
+    echo "$os"
+}
 _new_hostname() {
     local -a _first_names=(
         "James" "John" "Robert" "Michael" "William" "David" "Richard" "Joseph"
@@ -78,10 +91,25 @@ _new_hostname() {
         "Liam" "Noah" "Oliver" "Elijah" "Lucas" "Mason" "Ethan" "Aiden"
         "Alex" "Ryan" "Tyler" "Jordan" "Taylor" "Morgan" "Casey" "Riley"
     )
-    local -a _models=("MacBook-Pro" "MacBook-Air" "MacBook-Pro" "MacBook-Pro")
     local _name="${_first_names[$((RANDOM % ${#_first_names[@]}))]}"
-    local _model="${_models[$((RANDOM % ${#_models[@]}))]}"
-    echo "${_name}s-${_model}.local"
+    local _platform; _platform=$(_detect_hostname_platform)
+    case "$_platform" in
+        macos)
+            local -a _models=("MacBook-Pro" "MacBook-Air" "MacBook-Pro" "MacBook-Pro")
+            local _model="${_models[$((RANDOM % ${#_models[@]}))]}"
+            echo "${_name}s-${_model}.local"
+            ;;
+        windows)
+            local -a _prefixes=("DESKTOP" "LAPTOP")
+            local _prefix="${_prefixes[$((RANDOM % ${#_prefixes[@]}))]}"
+            echo "${_prefix}-$(_new_hostname_suffix)"
+            ;;
+        *)
+            local -a _devices=("desktop" "laptop" "workstation" "thinkpad")
+            local _device="${_devices[$((RANDOM % ${#_devices[@]}))]}"
+            echo "$(printf '%s' "$_name" | tr '[:upper:]' '[:lower:]')-${_device}"
+            ;;
+    esac
 }
 _new_mac() { printf '02:%02x:%02x:%02x:%02x:%02x' $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)); }
 _new_git_remote() { echo "https://github.com/user-$(_gen_uuid | cut -d- -f1)/project-$(_gen_uuid | cut -d- -f2).git"; }
@@ -317,10 +345,20 @@ _envs_using_version() {
 }
 
 # Elapsed time helper: call _timer_start, then _timer_elapsed
-_timer_start() { _TIMER_START=$(date +%s%N 2>/dev/null || date +%s); }
+_time_now() {
+    local now
+    now=$(date +%s%N 2>/dev/null || true)
+    if [[ "$now" =~ ^[0-9]{11,}$ ]]; then
+        echo "$now"
+    else
+        date +%s
+    fi
+}
+
+_timer_start() { _TIMER_START=$(_time_now); }
 _timer_elapsed() {
-    local now; now=$(date +%s%N 2>/dev/null || date +%s)
-    if [[ ${#now} -gt 10 ]]; then
+    local now; now=$(_time_now)
+    if [[ "$now" =~ ^[0-9]{11,}$ && "${_TIMER_START:-}" =~ ^[0-9]{11,}$ ]]; then
         # nanoseconds available
         local ms=$(( (now - _TIMER_START) / 1000000 ))
         if [[ $ms -ge 1000 ]]; then

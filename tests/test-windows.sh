@@ -338,6 +338,37 @@ try {
 " 2>/dev/null || true)
 [[ "$hook_status" == "ok" ]] && pass "hook 覆盖默认与空 locale 参数并伪装 Date 字符串" || fail "hook 未完整覆盖 Intl/Date: $hook_status"
 
+# ── T22: 平台化 hostname ──
+echo ""
+echo "[T22] 平台化 hostname (_new_hostname)"
+hostname_out=$(bash -c "source '$PROJECT_DIR/src/utils.sh'; _new_hostname")
+if is_windows; then
+    [[ "$hostname_out" =~ ^(DESKTOP|LAPTOP)-[A-F0-9]{5}$ ]] \
+        && pass "Windows hostname 格式: $hostname_out" \
+        || fail "期望 DESKTOP-xxxxx / LAPTOP-xxxxx, 实际: $hostname_out"
+elif is_linux; then
+    # Linux 也可能被识别为 windows（WSL）；分别处理。
+    if [[ "$hostname_out" =~ ^(DESKTOP|LAPTOP)-[A-F0-9]{5}$ ]]; then
+        pass "WSL/Linux 识别为 windows: $hostname_out"
+    elif [[ "$hostname_out" =~ ^[a-z]+-(desktop|laptop|workstation|thinkpad)$ ]]; then
+        pass "Linux hostname 格式: $hostname_out"
+    else
+        fail "Linux/WSL hostname 格式异常: $hostname_out"
+    fi
+else
+    [[ "$hostname_out" == *".local" ]] \
+        && pass "macOS hostname 格式: $hostname_out" \
+        || fail "macOS hostname 格式异常: $hostname_out"
+fi
+
+# ── T23: 计时器对非 GNU date 的兼容 ──
+echo ""
+echo "[T23] _timer_start / _timer_elapsed 兼容性"
+timer_out=$(bash -c "source '$PROJECT_DIR/src/utils.sh'; _timer_start; sleep 0.1; _timer_elapsed")
+[[ "$timer_out" =~ ^[0-9]+(\.[0-9])?(s|ms)$ ]] \
+    && pass "计时器输出合理: $timer_out" \
+    || fail "计时器输出异常: $timer_out"
+
 # ── 总结 ──
 echo ""
 echo "════════════════════════════════════════════════════════"
