@@ -5,6 +5,17 @@ description: Release history and notable changes
 
 All notable changes to this project are documented here. Each entry links to the corresponding PR or issue.
 
+## v1.5.8-win.5
+<sub>2026-04-28</sub>
+
+**Fix: disable `cac self update` in this fork**
+
+`cac self update` was inherited from upstream and still pointed to `https://raw.githubusercontent.com/nmhjklnm/cac/master/cac`. Running it on a cac-win install would silently overwrite the fork's `cac` binary with upstream's version, discarding every Windows-specific patch (T01–T07 from the 2026-04-28 sync round, plus all earlier fork divergence).
+
+- Replace the update body with a clear error pointing to the correct flow: `git pull` + `scripts/install-local-win.ps1`.
+- Remove the dead `_SELF_REPO` constant and upstream raw-URL references from `cmd_self.sh`.
+- Update `cac self help` to surface the fork-specific update guidance instead of an `update` subcommand that silently destroyed the install.
+
 ## v1.5.8-win.4
 <sub>2026-04-28</sub>
 

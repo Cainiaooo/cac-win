@@ -11,7 +11,7 @@ VERSIONS_DIR="$CAC_DIR/versions"
 # ── utils: colors, read/write, UUID, proxy parsing ───────────────────────
 
 # shellcheck disable=SC2034  # used in build-concatenated cac script
-CAC_VERSION="1.5.8-win.4"
+CAC_VERSION="1.5.8-win.5"
 
 _read()   { [[ -f "$1" ]] && tr -d '[:space:]' < "$1" || echo "${2:-}"; }
 _die()    { printf '%b\n' "$(_red "error:") $*" >&2; exit 1; }
@@ -3675,41 +3675,25 @@ cmd_claude() {
 # ━━━ cmd_self.sh ━━━
 # ── cmd: self (cac self-management, like "uv self") ──────────────
 
-_SELF_REPO="https://raw.githubusercontent.com/nmhjklnm/cac/master"
-
 _self_cmd_update() {
-    local method; method=$(_install_method)
+    cat >&2 <<EOF
 
-    echo "Updating cac ..."
-    _timer_start
+$(_yellow "warning:") $(_bold "cac self update") is disabled in cac-win.
 
-    case "$method" in
-        npm)
-            echo "  Install method: $(_cyan "npm")"
-            npm update -g claude-cac 2>&1 || _die "npm update failed"
-            ;;
-        bash)
-            echo "  Install method: $(_cyan "bash")"
-            local bin_dir="$HOME/bin"
-            mkdir -p "$bin_dir"
-            echo "  Downloading latest cac"
-            if curl -fL --progress-bar -o "$bin_dir/cac.tmp" "$_SELF_REPO/cac" 2>&1; then
-                chmod +x "$bin_dir/cac.tmp"
-                mv "$bin_dir/cac.tmp" "$bin_dir/cac"
-            else
-                rm -f "$bin_dir/cac.tmp"
-                _die "download failed"
-            fi
-            # Regenerate wrapper and shims from new binary
-            _ensure_initialized
-            ;;
-        *)
-            _die "unknown install method\n  Reinstall with: curl -fsSL $_SELF_REPO/install.sh | bash"
-            ;;
-    esac
+This fork is install-by-local-clone, not npm. Running self-update would
+overwrite your local cac with upstream nmhjklnm/cac and discard all
+Windows-specific patches.
 
-    local elapsed; elapsed=$(_timer_elapsed)
-    echo "$(_green_bold "Updated") cac $(_dim "in $elapsed")"
+To update cac-win, from your cloned repository run:
+
+    git pull origin master
+    npm install
+    powershell -ExecutionPolicy Bypass -File ./scripts/install-local-win.ps1
+
+Then reopen your terminal.
+
+EOF
+    exit 1
 }
 
 cmd_self() {
@@ -3719,8 +3703,10 @@ cmd_self() {
         help|-h|--help)
             echo "$(_bold "cac self") — cac self-management"
             echo
-            echo "  $(_bold "update")    Update cac to the latest version"
             echo "  $(_bold "delete")    Uninstall cac completely"
+            echo
+            echo "  $(_dim "cac self update is disabled in cac-win.")"
+            echo "  $(_dim "Update via 'git pull' + scripts/install-local-win.ps1 in your clone.")"
             ;;
         *) _die "unknown: cac self $1" ;;
     esac
