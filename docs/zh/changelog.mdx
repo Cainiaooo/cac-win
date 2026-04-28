@@ -5,6 +5,17 @@ description: 版本发布历史和重要变更
 
 所有重要变更记录在此，每个条目关联对应的 PR 或 Issue。
 
+## v1.5.8-win.5
+<sub>2026-04-28</sub>
+
+**Fix：禁用本 fork 的 `cac self update`**
+
+`cac self update` 是从上游继承下来的，里面的下载源仍然写死指向 `https://raw.githubusercontent.com/nmhjklnm/cac/master/cac`。在 cac-win 安装上运行会**静默把本 fork 的 `cac` 二进制覆盖成上游版本**，丢掉所有 Windows 专有补丁（包括 2026-04-28 同步轮的 T01–T07，以及更早的 fork 分歧）。
+
+- 替换 update 实现为明确的错误提示，引导用户走正确流程：`git pull` + `scripts/install-local-win.ps1`。
+- 移除 `cmd_self.sh` 中无用的 `_SELF_REPO` 常量与上游 raw URL 引用。
+- 更新 `cac self help` 输出，把 fork 的更新指引展示出来，不再露出会破坏安装的 `update` 子命令。
+
 ## v1.5.8-win.4
 <sub>2026-04-28</sub>
 
