@@ -164,6 +164,19 @@ _parse_proxy() {
     fi
 }
 
+# curl-based health probes should use remote DNS for SOCKS5.
+# Otherwise local DNS pollution can resolve probe domains to sinkhole/test
+# addresses, causing false negatives even when the proxy itself is healthy.
+_curl_proxy_url() {
+    local normalized
+    normalized=$(_parse_proxy "$1")
+    if [[ "$normalized" =~ ^socks5:// ]]; then
+        echo "socks5h://${normalized#socks5://}"
+    else
+        echo "$normalized"
+    fi
+}
+
 # socks5://user:pass@host:port → host:port
 _proxy_host_port() {
     local normalized

@@ -250,7 +250,7 @@ try {
         else
             local ip_tz=""
             local proxy_meta=""
-            proxy_meta=$(curl -s --proxy "$proxy" --connect-timeout 5 --max-time 8 \
+            proxy_meta=$(curl -s --proxy "$(_curl_proxy_url "$proxy")" --connect-timeout 5 --max-time 8 \
                 "http://ip-api.com/json/?fields=query,timezone" 2>/dev/null || true)
             if [[ -n "$proxy_meta" ]]; then
                 local parsed_meta
@@ -271,7 +271,7 @@ try {
                 for _ip_url in $_urls; do
                     _dots="${_dots}."
                     printf "\r    · exit IP    $(_dim "detecting${_dots}")"
-                    proxy_ip=$(curl --proxy "$proxy" --connect-timeout 3 --max-time 6 "$_ip_url" 2>/dev/null || true)
+                    proxy_ip=$(curl --proxy "$(_curl_proxy_url "$proxy")" --connect-timeout 3 --max-time 6 "$_ip_url" 2>/dev/null || true)
                     [[ "$proxy_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break
                     proxy_ip=""
                 done
@@ -283,7 +283,7 @@ try {
                 local env_tz; env_tz=$(_read "$env_dir/tz" "")
                 if [[ -n "$env_tz" ]] && [[ -n "$proxy_ip" ]]; then
                     if [[ -z "$ip_tz" ]]; then
-                        ip_tz=$(curl -s --proxy "$proxy" --connect-timeout 5 "http://ip-api.com/json/$proxy_ip?fields=timezone" 2>/dev/null | \
+                        ip_tz=$(curl -s --proxy "$(_curl_proxy_url "$proxy")" --connect-timeout 5 "http://ip-api.com/json/$proxy_ip?fields=timezone" 2>/dev/null | \
                             node -e "
 const fs = require('fs');
 try {
