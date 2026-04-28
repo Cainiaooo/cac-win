@@ -13,7 +13,7 @@ cmd_check() {
     fi
 
     local env_dir="$ENVS_DIR/$current"
-    local proxy; proxy=$(_read "$env_dir/proxy" "")
+    local proxy; proxy=$(_parse_proxy "$(_read "$env_dir/proxy" "")")
 
     # Resolve version
     local ver; ver=$(_read "$env_dir/version" "")

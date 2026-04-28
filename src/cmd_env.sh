@@ -229,7 +229,7 @@ _env_cmd_ls() {
         [[ -d "$env_dir" ]] || continue
         names+=("$(basename "$env_dir")")
         versions+=("$(_read "$env_dir/version" "system")")
-        local p; p=$(_read "$env_dir/proxy" "")
+        local p; p=$(_parse_proxy "$(_read "$env_dir/proxy" "")")
         if [[ -n "$p" ]] && [[ "$p" == *"://"*"@"* ]]; then
             p=$(echo "$p" | sed 's|://[^@]*@|://***@|')
         fi

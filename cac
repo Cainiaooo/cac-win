@@ -134,11 +134,30 @@ _get_real_cmd() {
 }
 
 # host:port:user:pass → http://user:pass@host:port
-# or pass a full URL directly (http://, https://, socks5://)
+# socks5://host:port:user:pass → socks5://user:pass@host:port
+# or pass a standard URL directly (http://, https://, socks5://)
 _parse_proxy() {
     local raw="$1"
-    # Already a full URL, return as-is
+    local proto rest
+
+    [[ -n "$raw" ]] || return 0
+
+    # Normalize protocol-prefixed legacy form:
+    #   socks5://host:port:user:pass -> socks5://user:pass@host:port
     if [[ "$raw" =~ ^(http|https|socks5):// ]]; then
+        proto="${raw%%://*}"
+        rest="${raw#*://}"
+        if [[ "$rest" != *"@"* ]] && [[ "$rest" == *:*:* ]]; then
+            local host port user pass
+            host=$(echo "$rest" | cut -d: -f1)
+            port=$(echo "$rest" | cut -d: -f2)
+            user=$(echo "$rest" | cut -d: -f3)
+            pass=$(echo "$rest" | cut -d: -f4-)
+            if [[ -n "$host" ]] && [[ -n "$port" ]] && [[ -n "$user" ]]; then
+                echo "${proto}://${user}:${pass}@${host}:${port}"
+                return
+            fi
+        fi
         echo "$raw"
         return
     fi
@@ -157,7 +176,9 @@ _parse_proxy() {
 
 # socks5://user:pass@host:port → host:port
 _proxy_host_port() {
-    echo "$1" | sed 's|.*@||' | sed 's|.*://||'
+    local normalized
+    normalized=$(_parse_proxy "$1")
+    echo "$normalized" | sed 's|.*@||' | sed 's|.*://||'
 }
 
 _tcp_check() {
@@ -1444,6 +1465,19 @@ fi
 PROXY=""
 if [[ -f "$_env_dir/proxy" ]]; then
     PROXY=$(tr -d '[:space:]' < "$_env_dir/proxy")
+    if [[ "$PROXY" =~ ^(http|https|socks5):// ]]; then
+        _proto="${PROXY%%://*}"
+        _rest="${PROXY#*://}"
+        if [[ "$_rest" != *"@"* ]] && [[ "$_rest" == *:*:* ]]; then
+            _phost=$(echo "$_rest" | cut -d: -f1)
+            _pport=$(echo "$_rest" | cut -d: -f2)
+            _puser=$(echo "$_rest" | cut -d: -f3)
+            _ppass=$(echo "$_rest" | cut -d: -f4-)
+            if [[ -n "$_phost" ]] && [[ -n "$_pport" ]] && [[ -n "$_puser" ]]; then
+                PROXY="${_proto}://${_puser}:${_ppass}@${_phost}:${_pport}"
+            fi
+        fi
+    fi
 fi
 
 if [[ -n "$PROXY" ]]; then
@@ -2272,7 +2306,7 @@ _env_cmd_ls() {
         [[ -d "$env_dir" ]] || continue
         names+=("$(basename "$env_dir")")
         versions+=("$(_read "$env_dir/version" "system")")
-        local p; p=$(_read "$env_dir/proxy" "")
+        local p; p=$(_parse_proxy "$(_read "$env_dir/proxy" "")")
         if [[ -n "$p" ]] && [[ "$p" == *"://"*"@"* ]]; then
             p=$(echo "$p" | sed 's|://[^@]*@|://***@|')
         fi
@@ -2576,7 +2610,7 @@ cmd_env() {
 _relay_start() {
     local name="${1:-$(_current_env)}"
     local env_dir="$ENVS_DIR/$name"
-    local proxy; proxy=$(_read "$env_dir/proxy")
+    local proxy; proxy=$(_parse_proxy "$(_read "$env_dir/proxy")")
     [[ -z "$proxy" ]] && return 1
 
     local relay_js="$CAC_DIR/relay.js"
@@ -2754,7 +2788,7 @@ cmd_relay() {
 
             # --route flag: add direct route
             if [[ "$flag" == "--route" ]]; then
-                local proxy; proxy=$(_read "$env_dir/proxy")
+                local proxy; proxy=$(_parse_proxy "$(_read "$env_dir/proxy")")
                 _relay_add_route "$proxy"
             fi
 
@@ -2824,7 +2858,7 @@ cmd_check() {
     fi
 
     local env_dir="$ENVS_DIR/$current"
-    local proxy; proxy=$(_read "$env_dir/proxy" "")
+    local proxy; proxy=$(_parse_proxy "$(_read "$env_dir/proxy" "")")
 
     # Resolve version
     local ver; ver=$(_read "$env_dir/version" "")

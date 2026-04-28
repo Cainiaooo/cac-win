@@ -124,11 +124,30 @@ _get_real_cmd() {
 }
 
 # host:port:user:pass → http://user:pass@host:port
-# or pass a full URL directly (http://, https://, socks5://)
+# socks5://host:port:user:pass → socks5://user:pass@host:port
+# or pass a standard URL directly (http://, https://, socks5://)
 _parse_proxy() {
     local raw="$1"
-    # Already a full URL, return as-is
+    local proto rest
+
+    [[ -n "$raw" ]] || return 0
+
+    # Normalize protocol-prefixed legacy form:
+    #   socks5://host:port:user:pass -> socks5://user:pass@host:port
     if [[ "$raw" =~ ^(http|https|socks5):// ]]; then
+        proto="${raw%%://*}"
+        rest="${raw#*://}"
+        if [[ "$rest" != *"@"* ]] && [[ "$rest" == *:*:* ]]; then
+            local host port user pass
+            host=$(echo "$rest" | cut -d: -f1)
+            port=$(echo "$rest" | cut -d: -f2)
+            user=$(echo "$rest" | cut -d: -f3)
+            pass=$(echo "$rest" | cut -d: -f4-)
+            if [[ -n "$host" ]] && [[ -n "$port" ]] && [[ -n "$user" ]]; then
+                echo "${proto}://${user}:${pass}@${host}:${port}"
+                return
+            fi
+        fi
         echo "$raw"
         return
     fi
@@ -147,7 +166,9 @@ _parse_proxy() {
 
 # socks5://user:pass@host:port → host:port
 _proxy_host_port() {
-    echo "$1" | sed 's|.*@||' | sed 's|.*://||'
+    local normalized
+    normalized=$(_parse_proxy "$1")
+    echo "$normalized" | sed 's|.*@||' | sed 's|.*://||'
 }
 
 _tcp_check() {

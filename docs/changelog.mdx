@@ -5,6 +5,13 @@ description: Release history and notable changes
 
 All notable changes to this project are documented here. Each entry links to the corresponding PR or issue.
 
+## v1.5.8-win.1
+<sub>2026-04-28 (fork)</sub>
+
+**Fix: legacy SOCKS5 proxy URI normalization across startup paths**
+
+Proxies stored as `socks5://host:port:user:pass` (the legacy 4-segment form embedded after the protocol prefix) are now normalized to `socks5://user:pass@host:port` before connectivity checks, relay startup, and environment listings. The generated wrapper inlines the normalization logic since it cannot call helpers from the main `cac` script at startup time. Ports upstream `902728b` (proxy hunks only — the exit-IP semantic change is deferred) and `8c34ebf`.
+
 ## v1.5.8-win.0
 <sub>2026-04-28 (fork)</sub>
 
