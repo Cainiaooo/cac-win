@@ -174,6 +174,19 @@ _parse_proxy() {
     fi
 }
 
+# curl-based health probes should use remote DNS for SOCKS5.
+# Otherwise local DNS pollution can resolve probe domains to sinkhole/test
+# addresses, causing false negatives even when the proxy itself is healthy.
+_curl_proxy_url() {
+    local normalized
+    normalized=$(_parse_proxy "$1")
+    if [[ "$normalized" =~ ^socks5:// ]]; then
+        echo "socks5h://${normalized#socks5://}"
+    else
+        echo "$normalized"
+    fi
+}
+
 # socks5://user:pass@host:port → host:port
 _proxy_host_port() {
     local normalized
@@ -2139,7 +2152,7 @@ _env_cmd_create() {
     if [[ -n "$proxy_url" ]]; then
         printf "  $(_dim "Detecting timezone ...") "
         local ip_info
-        ip_info=$(curl -s --proxy "$proxy_url" --connect-timeout 8 "http://ip-api.com/json/?fields=timezone,countryCode" 2>/dev/null || true)
+        ip_info=$(curl -s --proxy "$(_curl_proxy_url "$proxy_url")" --connect-timeout 8 "http://ip-api.com/json/?fields=timezone,countryCode" 2>/dev/null || true)
         if [[ -n "$ip_info" ]]; then
             local detected_tz country_code
             read -r detected_tz country_code < <(echo "$ip_info" | node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));process.stdout.write((d.timezone||'')+' '+(d.countryCode||''))" 2>/dev/null || echo "")
@@ -3095,7 +3108,7 @@ try {
         else
             local ip_tz=""
             local proxy_meta=""
-            proxy_meta=$(curl -s --proxy "$proxy" --connect-timeout 5 --max-time 8 \
+            proxy_meta=$(curl -s --proxy "$(_curl_proxy_url "$proxy")" --connect-timeout 5 --max-time 8 \
                 "http://ip-api.com/json/?fields=query,timezone" 2>/dev/null || true)
             if [[ -n "$proxy_meta" ]]; then
                 local parsed_meta
@@ -3116,7 +3129,7 @@ try {
                 for _ip_url in $_urls; do
                     _dots="${_dots}."
                     printf "\r    · exit IP    $(_dim "detecting${_dots}")"
-                    proxy_ip=$(curl --proxy "$proxy" --connect-timeout 3 --max-time 6 "$_ip_url" 2>/dev/null || true)
+                    proxy_ip=$(curl --proxy "$(_curl_proxy_url "$proxy")" --connect-timeout 3 --max-time 6 "$_ip_url" 2>/dev/null || true)
                     [[ "$proxy_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break
                     proxy_ip=""
                 done
@@ -3128,7 +3141,7 @@ try {
                 local env_tz; env_tz=$(_read "$env_dir/tz" "")
                 if [[ -n "$env_tz" ]] && [[ -n "$proxy_ip" ]]; then
                     if [[ -z "$ip_tz" ]]; then
-                        ip_tz=$(curl -s --proxy "$proxy" --connect-timeout 5 "http://ip-api.com/json/$proxy_ip?fields=timezone" 2>/dev/null | \
+                        ip_tz=$(curl -s --proxy "$(_curl_proxy_url "$proxy")" --connect-timeout 5 "http://ip-api.com/json/$proxy_ip?fields=timezone" 2>/dev/null | \
                             node -e "
 const fs = require('fs');
 try {

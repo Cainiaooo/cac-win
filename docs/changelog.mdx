@@ -5,6 +5,27 @@ description: Release history and notable changes
 
 All notable changes to this project are documented here. Each entry links to the corresponding PR or issue.
 
+## v1.5.8-win.2
+<sub>2026-04-28 (fork)</sub>
+
+**Fix: SOCKS5 diagnostics were using local DNS instead of proxy DNS**
+
+`cac env create` timezone detection and `cac env check` exit-IP / TZ verification previously called `curl --proxy socks5://...` directly. With SOCKS5, that makes `curl` resolve probe domains **locally** instead of through the remote proxy.
+
+In environments with DNS pollution, split-DNS, captive enterprise resolvers, or synthetic test ranges such as `198.18.0.0/15` (Clash/mihomo), that created a bad failure mode:
+
+- the proxy itself was healthy
+- real proxied traffic still worked
+- but diagnostic requests resolved to the wrong address locally and failed during TLS
+- `cac env check` then reported `✗ exit IP unable to verify via proxy`
+- new environments could also inherit the wrong timezone during creation
+
+- Added an internal `_curl_proxy_url` helper that rewrites curl-based SOCKS5 probes to `socks5h://...`, forcing remote DNS resolution. HTTP/HTTPS proxies pass through unchanged.
+- Wrapped all three `curl --proxy` probes in `cmd_check.sh` (one-shot metadata, exit-IP retry loop, TZ fallback) and the timezone geo-detect in `cmd_env.sh`. Localhost relay probes are intentionally untouched (not SOCKS5).
+- Added `scripts/test-socks5h-probes.sh` regression test and wired it into the CI build-check job.
+
+Ports upstream `00d2796` (fork sync).
+
 ## v1.5.8-win.1
 <sub>2026-04-28 (fork)</sub>
 
