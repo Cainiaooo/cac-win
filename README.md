@@ -16,6 +16,8 @@
 
 完整的上游式跨平台 README 已归档到 [docs/original-readme.md](docs/original-readme.md)。其中的 npm 安装/更新说明只适用于上游包，不代表本仓库已发布到 npm。
 
+> **版本号说明**：`package.json`、`src/utils.sh:CAC_VERSION` 和构建产物 `cac` 内嵌的版本号通过 CI 强制一致。本 fork 不发布到 npm registry —— 安装方式仅限本地 clone（见上文）。`-win.N` 后缀表示这是 Windows fork 在某个上游版本基础上的累计修订。
+
 ## 前置要求
 
 - Windows 10/11

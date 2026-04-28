@@ -5,6 +5,20 @@ description: Release history and notable changes
 
 All notable changes to this project are documented here. Each entry links to the corresponding PR or issue.
 
+## v1.5.8-win.4
+<sub>2026-04-28</sub>
+
+**Chore: align fork version metadata and add CI consistency check**
+
+This release is the wrap-up of the 2026-04-28 upstream sync round (T01–T05 from `docs/upstream-merge-plan-2026-04-28.md`; T06 fish shell PATH integration was deliberately skipped).
+
+- `package.json` version is now `1.5.8-win.4`, matching `CAC_VERSION` in `src/utils.sh` and the version embedded in the built `cac` binary. Previously the fork shipped `package.json=1.0.0` while runtime reported `1.5.8`, which broke any tooling that relied on either source.
+- New CI job `version-check` fails the build whenever `package.json`, `src/utils.sh:CAC_VERSION`, and the `CAC_VERSION="..."` line inside `cac` drift apart.
+- Removed `.github/workflows/npm-publish.yml`. This fork is not published to npm; users install via local clone (see README). The publish workflow only existed as upstream inheritance and could fire by accident on a `v*` tag.
+- The README now states the version-source-of-truth and the explicit no-npm-publish stance.
+
+No runtime behavior changes.
+
 ## v1.5.8-win.3
 <sub>2026-04-28</sub>
 

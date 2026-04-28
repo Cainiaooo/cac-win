@@ -5,6 +5,20 @@ description: 版本发布历史和重要变更
 
 所有重要变更记录在此，每个条目关联对应的 PR 或 Issue。
 
+## v1.5.8-win.4
+<sub>2026-04-28</sub>
+
+**Chore：统一 fork 版本元数据，新增 CI 一致性校验**
+
+本次发布是 2026-04-28 上游同步轮次（T01–T05，详见 `docs/upstream-merge-plan-2026-04-28.md`；T06 fish shell PATH 集成被刻意跳过）的收口。
+
+- `package.json` 版本号现已对齐到 `1.5.8-win.4`，与 `src/utils.sh` 中的 `CAC_VERSION` 以及构建产物 `cac` 内嵌版本号保持一致。此前 fork 的 `package.json=1.0.0`、运行时却报 `1.5.8`，会让依赖任一来源的工具失效。
+- 新增 CI job `version-check`，当 `package.json`、`src/utils.sh:CAC_VERSION`、`cac` 内嵌的 `CAC_VERSION="..."` 三者出现漂移时会让构建失败。
+- 删除 `.github/workflows/npm-publish.yml`。本 fork 不发布 npm，安装路径是本地 clone（见 README）。该 workflow 仅是上游遗留，存在被 `v*` 标签误触发的风险。
+- README 已明确版本号唯一真源以及"不发 npm"的立场。
+
+无运行时行为变更。
+
 ## v1.5.8-win.3
 <sub>2026-04-28</sub>
 
@@ -38,6 +52,13 @@ description: 版本发布历史和重要变更
 - 新增 `scripts/test-socks5h-probes.sh` 回归测试，并接入 CI build-check job。
 
 同步上游 `00d2796`（fork sync）。
+
+## v1.5.8-win.1
+<sub>2026-04-28（fork）</sub>
+
+**修复：跨启动路径统一规范化 legacy SOCKS5 代理 URI**
+
+以 `socks5://host:port:user:pass`（在协议前缀后嵌入 4 段 legacy 写法）形式存储的代理地址，现在会在连通性检查、relay 启动以及环境列表展示之前统一规范化为 `socks5://user:pass@host:port`。生成的 wrapper 内联了规范化逻辑，因为它在启动时无法调用主 `cac` 脚本中的 helper 函数。同步上游 `902728b`（仅 proxy hunks——出口 IP 语义变更延后处理）和 `8c34ebf`。
 
 ## v1.5.8-win.0
 <sub>2026-04-28（fork）</sub>

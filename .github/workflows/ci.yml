@@ -62,3 +62,24 @@ jobs:
           node --check src/relay.js
           node --check src/fingerprint-hook.js
           echo "✓ All JS files parse successfully"
+
+  version-check:
+    name: Version consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify package.json, CAC_VERSION, and built cac agree
+        run: |
+          set -euo pipefail
+          pkg_ver=$(node -p "require('./package.json').version")
+          src_ver=$(grep -E '^CAC_VERSION=' src/utils.sh | sed -E 's/.*"([^"]+)".*/\1/')
+          cac_ver=$(grep -E '^CAC_VERSION=' cac | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "package.json: $pkg_ver"
+          echo "src/utils.sh: $src_ver"
+          echo "cac:          $cac_ver"
+          if [[ "$pkg_ver" != "$src_ver" ]] || [[ "$pkg_ver" != "$cac_ver" ]]; then
+            echo "::error::Version drift detected. All three must match."
+            exit 1
+          fi
+          echo "✓ All three sources report $pkg_ver"
