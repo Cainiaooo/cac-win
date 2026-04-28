@@ -51,85 +51,241 @@ npm prefix -g
 
 常见路径是 `%APPDATA%\npm`。安装脚本会自动尝试写入用户 PATH，并适配 nvm-windows / fnm / volta 等 Node.js 管理器；如果当前终端没有刷新，重开终端后再试。
 
-## 首次使用
+## 快速开始
+
+> **只想快速用起来？** 安装好之后只需两行：
+> ```powershell
+> cac claude install latest
+> cac env create main -p 127.0.0.1:7897
+> ```
+> 然后跳到 [日常使用](#日常使用) 看每天怎么操作。下面场景按需查阅，不需要全看。
+
+在使用 cac 之前，先理解两个概念：
+
+- **环境（env）**：一组隔离的配置，包括代理、Claude Code 版本、设备指纹、`.claude` 配置目录。每个环境互不干扰。
+- **版本（version）**：cac 托管的 Claude Code 二进制，存放在 `~/.cac/versions/`，多个环境可以共享同一个版本。
+
+下面按常见场景介绍如何创建环境，可以按需跳读：
+
+| 场景 | 适合谁 | 
+|:--|:--|
+| [A：只要隔离，不要代理](#场景-a只要环境隔离不需要代理) | 不走代理、只做配置隔离 |
+| [B：需要代理](#场景-b需要通过代理连接-anthropic-api) | 用了 Clash/V2Ray 等本地代理 |
+| [C：多套独立配置](#场景-c多个环境各自独立配置-clone-与-no-link) | 需要不同 skills/hooks/settings |
+| [D：始终用最新版](#场景-d希望环境始终使用最新-claude-code) | 不想手动管版本 |
+| [E：固定版本](#场景-e固定使用某个-claude-code-版本) | 需要稳定、不升级 |
+
+### 场景 A：只要环境隔离，不需要代理
+
+只是想隔离 `.claude` 配置、设备指纹，让不同用途（个人/工作）的 Claude Code 互不干扰：
 
 ```powershell
-# 安装 cac 托管的 Claude Code 二进制
+# 第一次使用，先安装 Claude Code
 cac claude install latest
 
-# 创建并激活 Windows 环境；代理可按需填写
-cac env create win-work -p 1.2.3.4:1080:u:p
+# 创建环境（不带 -p，不配置代理）
+cac env create personal
 
-# 检查当前环境
-cac env check
+# 创建第二个环境
+cac env create work
 
-# 启动 Claude Code；首次进入后使用 /login
+# 切换到 personal 环境
+cac personal
+
+# 启动 Claude
 claude
 ```
 
-不需要代理时也可以只做身份/配置隔离：
+创建环境时如果不指定版本，会自动安装最新版。
+
+### 场景 B：需要通过代理连接 Anthropic API
+
+最常见的场景：本地跑了 Clash Verge，监听 `127.0.0.1:7897`，想让 Claude Code 走这个代理：
 
 ```powershell
-cac env create personal
-cac env create work -c 2.1.81
+# 用 Clash Verge 的本地 HTTP 代理端口
+cac env create main -p 127.0.0.1:7897
+
+# 或者同时指定 Claude 版本
+cac env create main -p 127.0.0.1:7897 -c 2.1.81
 ```
 
-如果新开的 CMD / PowerShell 里找不到 `claude`，先重开终端；仍然找不到时，把 `%USERPROFILE%\.cac\bin` 加入用户 PATH。
-
-## 常用流程
-
-### 查看当前状态
+代理格式支持多种写法（详见 [代理格式](#代理格式)）：
 
 ```powershell
-cac env ls
-cac env check
-cac env check -d
-cac -v
+# 带认证的代理
+cac env create work -p 1.2.3.4:1080:username:password
+
+# SOCKS5 代理
+cac env create work -p socks5://127.0.0.1:1080
+
+# HTTP 代理（显式指定协议）
+cac env create work -p http://127.0.0.1:7897
 ```
 
-### 创建和切换环境
+**代理端口变化了怎么办？** 不需要重建环境，直接修改：
 
 ```powershell
-# 创建并自动激活环境
-cac env create work
+# 比如 Clash Verge 端口从 7897 改成了 7890
+cac env set main proxy 127.0.0.1:7890
 
-# 创建带代理的环境
-cac env create work-proxy -p 1.2.3.4:1080:u:p
+# 临时不想走代理了
+cac env set main proxy --remove
+```
 
-# 创建并绑定指定 Claude Code 版本
+### 场景 C：多个环境各自独立配置（--clone 与 --no-link）
+
+`--clone` 控制环境是否继承宿主 `~/.claude` 的已有配置（commands、hooks、skills、plugins、settings 等）。默认情况下（不加 `--clone`），每个环境从**空白 `.claude` 目录**开始，完全独立。
+
+| 行为 | 默认（不加 `--clone`） | `--clone` | `--clone --no-link` |
+|:--|:--|:--|:--|
+| `.claude/` 配置来源 | 空白，独立创建 | 从宿主 `~/.claude` 继承 | 从宿主 `~/.claude` 继承 |
+| 配置联动 | 无（独立） | 链接模式，宿主改 → 环境自动同步 | 复制独立副本，宿主改 → 环境不变 |
+
+> **注意**：Windows 上 cac 不会尝试创建符号链接，即使只写 `--clone`，也会自动走复制模式，效果等同 `--clone --no-link`（代码在 MINGW/MSYS/CYGWIN 下强制 `clone_link=false`）。
+
+```powershell
+# 继承宿主 ~/.claude 的配置（macOS/Linux 上会保持联动）
+cac env create work --clone
+
+# 复制一份完全独立的配置（Windows 默认行为）
+cac env create work --clone --no-link
+
+# 从已有环境 clone 配置
+cac env create work2 --clone work
+```
+
+**什么时候用 `--no-link`？**
+- 你想用完全不同的 `.claude` 配置（不同的 hooks、skills、settings）
+- 你希望环境不受宿主或 cc-switch 等工具的配置改动影响
+- 你在 Windows 上（本身就是默认行为）
+
+**什么时候用 `--clone`？**
+- 你用了 cc-switch 管理账号/API，希望切换后环境自动跟随
+- 你有统一的 skills/hooks 想在所有环境间共享
+- 你在 macOS/Linux 上
+
+### 场景 D：希望环境始终使用最新 Claude Code
+
+```powershell
+# 创建时加 --autoupdate，每次激活环境时提示是否有新版本
+cac env create main -p 127.0.0.1:7897 --autoupdate
+
+# 也可以在已有环境上开启
+cac env set main autoupdate on
+
+# 关闭自动检查
+cac env set main autoupdate off
+```
+
+激活环境时（`cac main`），如果远端有新版本，cac 会提示你是否更新。
+
+### 场景 E：固定使用某个 Claude Code 版本
+
+```powershell
+# 创建时指定版本
 cac env create legacy -c 2.1.81
 
-# 创建环境，并在每次激活时检查 Claude Code 更新
-cac env create work-auto --autoupdate
+# 已有环境绑定到指定版本
+cac env set legacy version 2.1.81
 
-# 从当前宿主配置复制 .claude 配置
-cac env create cloned --clone
-
-# 切换到某个环境
-cac work
-
-# 查看所有环境
-cac env ls
+# 更新到最新版
+cac claude update legacy
 ```
 
-### 修改环境
+> 场景速览结束。**已经知道怎么创建环境了？** 直接看 [日常使用](#日常使用) 和 [故障排查](#故障排查)。
+
+## 核心概念
+
+### 代理格式
+
+cac 支持以下代理格式，都会自动检测协议类型：
+
+| 格式 | 示例 | 说明 |
+|:--|:--|:--|
+| `host:port` | `127.0.0.1:7897` | 自动检测协议，默认 http |
+| `host:port:user:pass` | `1.2.3.4:1080:admin:1234` | 带认证 |
+| `http://host:port` | `http://127.0.0.1:7897` | 显式 HTTP |
+| `http://user:pass@host:port` | `http://admin:1234@1.2.3.4:1080` | 带认证的 HTTP |
+| `socks5://host:port` | `socks5://127.0.0.1:1080` | SOCKS5 |
+| `socks5://user:pass@host:port` | `socks5://admin:1234@1.2.3.4:1080` | 带认证的 SOCKS5 |
+
+### 环境做了什么？
+
+每个 cac 环境在 `~/.cac/envs/<name>/` 下保存了一组文件：
+
+```
+~/.cac/envs/main/
+├── .claude/          ← 独立的 CLAUDE_CONFIG_DIR
+├── proxy             ← 代理地址
+├── version           ← 绑定的 Claude Code 版本
+├── uuid / machine_id / hostname / mac_address  ← 随机生成的设备指纹
+├── tz / lang         ← 从代理 IP 地理检测的时区和语言
+├── client_cert.pem / client_key.pem  ← mTLS 客户端证书
+└── telemetry_mode    ← 遥测阻断策略
+```
+
+激活环境（`cac main`）后，运行 `claude` 会：
+
+1. 把 `~/.cac/bin/claude` wrapper 注入到 PATH
+2. wrapper 读取当前环境的配置
+3. 设置遥测阻断环境变量（12 个）
+4. 注入 `fingerprint-hook.js` 和 `cac-dns-guard.js`（通过 `NODE_OPTIONS`）
+5. 把 Claude Code 的配置目录指向环境独立的 `.claude/`
+6. 启动对应版本的 claude 二进制
+
+### 配置 clone 机制
+
+`--clone` 控制环境是否继承宿主 `~/.claude` 的已有配置。三种模式对比：
+
+```
+不加 --clone（默认，空白模式）
+  宿主 ~/.claude/commands/       环境 ~/.cac/envs/work/.claude/commands/
+  各自独立，环境从空白开始
+
+--clone（链接模式，macOS/Linux）
+  宿主 ~/.claude/commands/  ←──  环境 ~/.cac/envs/work/.claude/commands/
+  宿主改了 commands → 环境自动同步
+
+--clone --no-link（复制模式，Windows 默认）
+  宿主 ~/.claude/commands/       环境 ~/.cac/envs/work/.claude/commands/
+  创建时复制一份，后续各自独立
+```
+
+settings.json 的处理更细致：cac 会在基础 settings 上叠加环境专属配置（如 statusline），不会直接覆盖。
+
+## 日常使用
+
+### 每天最常用的几条
 
 ```powershell
-# 给当前环境设置或修改代理
-cac env set proxy 1.2.3.4:1080:u:p
+cac main          # 激活主环境
+cac env check     # 检查环境状态（代理是否通、指纹是否生效）
+claude            # 启动 Claude Code
+cac env ls        # 看看有哪些环境
+cac env stop      # 暂停 cac 注入，恢复原生 Claude Code
+```
 
-# 给指定环境设置代理
-cac env set work proxy 1.2.3.4:1080:u:p
+> **激活是持久化的**：`cac <name>` 激活环境后，cac 注入会一直生效——关闭终端、重启电脑都不会自动取消。之后每次运行 `claude` 都会经过 cac wrapper。如果想恢复原生 Claude Code（不带任何注入），需要执行 `cac env stop`。
 
-# 移除当前环境代理
-cac env set proxy --remove
+### 管理环境
 
-# 切换当前环境使用的 Claude Code 版本
-cac env set version 2.1.81
+```powershell
+# 创建环境
+cac env create <name> [-p <proxy>] [-c <version>] [--clone] [--no-link] [--autoupdate]
 
-# 开启或关闭激活时的 Claude Code 更新检查
-cac env set work autoupdate on
-cac env set work autoupdate off
+# 切换环境
+cac <name>
+
+# 查看环境列表（▶ 表示当前激活）
+cac env ls
+
+# 修改当前环境的代理
+cac env set proxy 127.0.0.1:7890
+cac env set proxy --remove               # 移除代理
+
+# 修改指定环境的版本
+cac env set work version 2.1.81
 
 # 删除环境
 cac env rm work
@@ -138,42 +294,104 @@ cac env rm work
 ### 管理 Claude Code 版本
 
 ```powershell
-cac claude install latest
-cac claude install 2.1.81
+# 安装
+cac claude install latest                # 最新版
+cac claude install 2.1.81                # 指定版本
+
+# 查看已安装版本
 cac claude ls
-cac claude pin 2.1.81
-cac claude update work
+
+# 将当前环境更新到远端最新版
+cac claude update                        # 更新当前环境
+cac claude update work                   # 更新指定环境
+
+# 清理未被任何环境使用的版本
 cac claude prune
-cac claude prune --yes
+cac claude prune --yes                   # 直接删除
+
+# 卸载指定版本
 cac claude uninstall 2.1.81
 ```
 
-### 启动 Claude Code
+### 检查环境
 
 ```powershell
-# 确认已经激活目标环境
+cac env check          # 快速检查
+cac env check -d       # 详细检查（显示所有指纹、DNS、mTLS 状态）
+```
+
+检查项目包括：wrapper 是否激活、遥测是否阻断、设备指纹是否 spoof、IPv6 是否泄露、代理是否可达、出口 IP、TUN 冲突检测。
+
+### 故障排查
+
+| 问题 | 原因 | 解决 |
+|:--|:--|:--|
+| `which claude` 不是 `~/.cac/bin/claude` | PATH 顺序不对 | 重开终端，确认 `~/.cac/bin` 在 PATH 最前面 |
+| `claude` 提示找不到命令 | 没激活环境 | 先执行 `cac <name>` 激活 |
+| `cac env check` 代理不通 | 代理未启动或端口变了 | 确认 Clash/V2Ray 正在监听，用 `cac env set` 更新端口 |
+| 代理协议检测失败 | cac 自动检测不准确 | 显式指定协议：`cac env set proxy http://127.0.0.1:7897` |
+| IPv6 泄露警告 | 系统有 IPv6 公网地址 | 在网卡设置中关闭 IPv6，或代理软件中加 IPv6 规则 |
+| TUN 冲突 | Clash/sing-box TUN 模式拦截了代理流量 | 在代理软件中给代理服务器 IP 加 DIRECT 规则 |
+| 重启后 `claude` 仍然走 cac | cac 激活是持久化的 | 执行 `cac env stop` 暂停注入 |
+| 环境配置总被外部改动覆盖 | 创建时没加 `--no-link`，配置与宿主联动 | 重新创建环境并加 `--clone --no-link`，或用 `cac env detach <name>` 断开现有链接 |
+
+## 高级用法
+
+### 遥测阻断模式
+
+三种模式控制遥测阻断的力度：
+
+```powershell
+# stealth（默认）：只阻断 1p_events，功能正常
+cac env create main --telemetry stealth
+
+# paranoid：阻断所有遥测，部分功能可能受限（如 /bug 命令）
+cac env create main --telemetry paranoid
+
+# transparent：不阻断，所有遥测正常上报
+cac env create main --telemetry transparent
+```
+
+### Relay 模式（TUN 代理穿透）
+
+当使用 TUN 模式代理（Clash TUN、sing-box 等）时，所有流量被虚拟网卡拦截，可能导致 cac 的代理配置无法正常工作。Relay 模式在本地启动一个 TCP 中继来解决这个问题。
+
+```powershell
+# 检查 relay 状态（TUN 冲突时自动提示）
 cac env check
 
-# 启动；首次进入后执行 /login
-claude
+# 如果 check 提示 TUN 冲突，开启 relay
+cac relay on
+
+# 关闭 relay
+cac relay off
 ```
 
-## 代理格式
+### Persona（终端伪装）
 
-```text
-host:port:user:pass
-host:port
-socks5://u:p@host:port
-http://u:p@host:port
+主要用于 Docker/服务器环境，注入桌面终端环境变量来伪装成本地开发机：
+
+```powershell
+cac env set main persona macos-vscode
+cac env set main persona --remove
 ```
 
-代理不是必填项；不加 `-p` 时，环境仍然会隔离 `.claude` 配置、身份信息和 Claude Code 版本。
+可选值：`macos-vscode`、`macos-cursor`、`macos-iterm`、`linux-desktop`
+
+### 手动设置时区/语言
+
+默认情况下，创建环境时 cac 会根据代理出口 IP 自动检测时区和语言。你也可以手动覆盖：
+
+```powershell
+cac env set main tz Asia/Shanghai
+cac env set main lang zh_CN.UTF-8
+```
 
 ## 命令速查
 
 | 命令 | 用途 |
 |:--|:--|
-| `cac env create <name> [-p proxy] [-c version] [--clone] [--autoupdate]` | 创建并激活环境 |
+| `cac env create <name> [-p proxy] [-c version] [--clone] [--no-link] [--autoupdate] [--telemetry mode]` | 创建并激活环境 |
 | `cac <name>` | 切换到指定环境 |
 | `cac env ls` / `cac ls` | 查看环境列表 |
 | `cac env rm <name>` | 删除环境 |
@@ -181,10 +399,15 @@ http://u:p@host:port
 | `cac env set [name] proxy --remove` | 移除环境代理 |
 | `cac env set [name] version <version>` | 切换环境绑定的 Claude Code 版本 |
 | `cac env set [name] autoupdate <on\|off>` | 开启或关闭激活时的 Claude Code 更新检查 |
+| `cac env set [name] telemetry <stealth\|paranoid\|transparent>` | 设置遥测阻断模式 |
+| `cac env set [name] tz <timezone>` | 设置时区 |
+| `cac env set [name] lang <locale>` | 设置语言 |
+| `cac env detach <name>` | 断开 clone 链接，使环境配置独立 |
 | `cac env check [-d]` / `cac check` | 检查当前环境 |
+| `cac env stop` | 暂停 cac 注入，claude 原生运行 |
+| `cac relay on\|off\|status` | 管理 TUN 穿透中继 |
 | `cac claude install [latest\|<version>]` | 安装 Claude Code 版本 |
 | `cac claude ls` | 查看已安装 Claude Code 版本 |
-| `cac claude pin <version>` | 当前环境绑定指定版本 |
 | `cac claude update [env]` | 将环境更新到远端最新 Claude Code |
 | `cac claude prune [--yes]` | 列出或删除未被环境引用的 Claude Code 版本 |
 | `cac claude uninstall <version>` | 卸载指定版本 |
@@ -364,6 +587,115 @@ cac env ls
 
 > **Do I need to sync JS files?** Check `git log` or `git diff HEAD~1` — if only `src/*.sh` changed, no sync needed. If `src/fingerprint-hook.js`, `src/relay.js`, or `src/dns_block.sh` changed, sync is required.
 
+### Quickstart
+
+First, install a Claude Code version, then create an environment:
+
+```powershell
+# Install Claude Code
+cac claude install latest
+
+# Create an environment (no proxy)
+cac env create personal
+
+# Create an environment with proxy (e.g. Clash Verge on localhost:7897)
+cac env create main -p 127.0.0.1:7897
+```
+
+Common scenarios:
+
+```powershell
+# Auto-update Claude on activation
+cac env create main -p 127.0.0.1:7897 --autoupdate
+
+# Pin to a specific version
+cac env create legacy -c 2.1.81
+
+# Clone host ~/.claude config (linked, macOS/Linux)
+cac env create work --clone
+
+# Independent copy of config (Windows default)
+cac env create work --clone --no-link
+```
+
+### Proxy formats
+
+| Format | Example |
+|:--|:--|
+| `host:port` | `127.0.0.1:7897` |
+| `host:port:user:pass` | `1.2.3.4:1080:admin:1234` |
+| `http://host:port` | `http://127.0.0.1:7897` |
+| `http://user:pass@host:port` | `http://admin:1234@1.2.3.4:1080` |
+| `socks5://host:port` | `socks5://127.0.0.1:1080` |
+| `socks5://user:pass@host:port` | `socks5://admin:1234@1.2.3.4:1080` |
+
+### Daily usage
+
+```powershell
+cac main              # Activate environment
+cac env check         # Verify environment (proxy, fingerprint, telemetry)
+claude                # Start Claude Code
+cac env ls            # List environments
+cac env stop          # Pause cac injection, run Claude natively
+```
+
+> **Activation is persistent**: Once you run `cac <name>`, the cac wrapper stays active across terminal sessions and reboots. Every `claude` invocation will go through cac until you explicitly run `cac env stop`.
+
+### Modifying environments
+
+```powershell
+# Change proxy
+cac env set main proxy 127.0.0.1:7890
+
+# Remove proxy
+cac env set main proxy --remove
+
+# Change Claude version
+cac env set main version 2.1.81
+
+# Toggle auto-update
+cac env set main autoupdate on
+```
+
+### Managing Claude Code versions
+
+```powershell
+cac claude install latest
+cac claude install 2.1.81
+cac claude ls
+cac claude update work          # Update env to latest
+cac claude prune --yes          # Remove unused versions
+cac claude uninstall 2.1.81
+```
+
+### Environment check
+
+```powershell
+cac env check          # Quick check
+cac env check -d       # Detailed check (fingerprints, DNS, mTLS)
+```
+
+### Telemetry modes
+
+```powershell
+# stealth (default): block 1p_events only
+cac env create main --telemetry stealth
+
+# paranoid: block all telemetry
+cac env create main --telemetry paranoid
+
+# transparent: no blocking
+cac env create main --telemetry transparent
+```
+
+### Relay mode (TUN proxy bypass)
+
+```powershell
+cac relay on           # Enable relay for TUN-mode proxy
+cac relay off          # Disable
+cac relay status       # Check status
+```
+
 ### Updating an existing installation
 
 If you already have cac installed with environments set up, the update process is:
@@ -405,14 +737,14 @@ cac env check -d
 ### Uninstall
 
 ```powershell
-# 删除 cac 运行目录、wrapper 和环境数据
+# Delete cac runtime, wrappers, and environment data
 cac self delete
 
-# 删除 install-local-win.ps1 创建的全局 shim
+# Remove global shim created by install-local-win.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1 -Uninstall
 ```
 
-如果 `cac` 已经不可用，可以手动删除 `%USERPROFILE%\.cac`，再从仓库根目录执行上面的 `-Uninstall` 命令。
+If `cac` is already unavailable, manually delete `%USERPROFILE%\.cac`, then run the `-Uninstall` command above from the repo root.
 
 ## Windows 注意事项
 
