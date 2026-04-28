@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**cac** (Claude Anti-fingerprint Cloak) is a CLI environment manager for Claude Code. It provides version management, environment isolation, device fingerprint spoofing, telemetry blocking, and proxy routing. Published as `claude-cac` on npm. Supports macOS, Linux, and Windows.
+**cac-win** (Claude Anti-fingerprint Cloak, Windows fork) is a CLI environment manager for Claude Code. It provides version management, environment isolation, device fingerprint spoofing, telemetry blocking, and proxy routing. This fork targets **Windows** (with Git Bash) as the primary platform; macOS / Linux paths are inherited from upstream `nmhjklnm/cac` but not the focus. The fork is **install-by-local-clone** — it is **not published to npm**.
 
 ## Build System
 
@@ -87,17 +87,22 @@ Windows protection boundary: any native subprocess that reads fingerprint data *
 
 ## CI/CD
 
-- **ci.yml** — runs on push/PR to master: ShellCheck, build consistency check, JS syntax validation
-- **npm-publish.yml** — triggered by `v*` tags: updates version in `package.json` and `src/utils.sh`, runs `build.sh`, publishes to npm
+- **ci.yml** — runs on push/PR to master: ShellCheck, build consistency check, JS syntax validation, SOCKS5 probe regression, **version-check** (asserts `package.json` / `src/utils.sh:CAC_VERSION` / `cac` are identical)
 - **docker.yml** — builds Docker image to ghcr.io (manual/scheduled)
+- **feishu-notify.yml** — Feishu webhook for issue / PR events; gracefully skips if `FEISHU_WEBHOOK_URL` secret is unset
+- *(no npm-publish.yml — this fork does not ship to npm)*
 
 ## Key Conventions
 
-- Version constant lives in `src/utils.sh` as `CAC_VERSION` — updated automatically by the npm-publish workflow
+- Version constant `CAC_VERSION` in `src/utils.sh` follows the form `<upstream base>-win.<N>` (e.g. `1.5.8-win.4`). Bumped manually during upstream-sync wrap-up tasks; CI guards three-way consistency
 - All bash scripts must pass `shellcheck -S warning`
 - The `cac` root file is auto-generated — **never edit it directly**, always edit `src/` files
 - Zero npm runtime dependencies; the package ships only bash + vendored JS
-- `scripts/postinstall.js` handles npm post-install: makes binaries executable, syncs runtime JS files, patches wrappers, migrates old environments
+- `scripts/postinstall.js` handles install-time setup: makes binaries executable, syncs runtime JS files, patches wrappers, migrates old environments
+
+## Upstream Sync
+
+When pulling updates from upstream `nmhjklnm/cac`, do **not** run `git merge upstream/master` directly — the fork has deep Windows-specific divergences. Follow the worktree-per-task workflow documented in [`docs/upstream-sync/README.md`](docs/upstream-sync/README.md), and consult [`docs/upstream-sync/preserve-list.md`](docs/upstream-sync/preserve-list.md) for the list of fork-only files and shared-file regions that must not be overwritten. Each completed sync round is archived under `docs/upstream-sync/history/`.
 
 ## New Feature Checklist
 
