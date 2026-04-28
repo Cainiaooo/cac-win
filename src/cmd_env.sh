@@ -141,7 +141,7 @@ _env_cmd_create() {
             [[ "$clone_link" != "true" ]] && clone_mode="copied"
             echo "$clone_mode" > "$env_dir/clone_mode"
 
-            local clone_dirs="commands hooks skills plugins"
+            local clone_dirs="commands agents hooks skills plugins"
             for d in $clone_dirs; do
                 if [[ -d "$src_claude_dir/$d" ]]; then
                     rm -rf "$env_dir/.claude/$d"

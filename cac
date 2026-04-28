@@ -2184,7 +2184,7 @@ _env_cmd_create() {
             [[ "$clone_link" != "true" ]] && clone_mode="copied"
             echo "$clone_mode" > "$env_dir/clone_mode"
 
-            local clone_dirs="commands hooks skills plugins"
+            local clone_dirs="commands agents hooks skills plugins"
             for d in $clone_dirs; do
                 if [[ -d "$src_claude_dir/$d" ]]; then
                     rm -rf "$env_dir/.claude/$d"
@@ -4278,7 +4278,7 @@ cmd_help() {
     echo
 
     echo "  $(_bold "Environment")"
-    echo "    $(_green "cac env create") <name> [-p proxy] [-c ver] [--autoupdate]"
+    echo "    $(_green "cac env create") <name> [-p proxy] [-c ver] [--clone [source]] [--no-link] [--autoupdate]"
     echo "    $(_green "cac env set") [name] <key> <value>   Modify environment"
     echo "    $(_green "cac env ls")                  List all environments"
     echo "    $(_green "cac env rm") <name>           Remove an environment"
