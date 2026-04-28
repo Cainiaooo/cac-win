@@ -374,6 +374,34 @@ timer_out=$(bash -c "source '$PROJECT_DIR/src/utils.sh'; _timer_start; sleep 0.1
     && pass "计时器输出合理: $timer_out" \
     || fail "计时器输出异常: $timer_out"
 
+# ── T24: 代理 URI 规范化（_parse_proxy / _proxy_host_port）──
+echo ""
+echo "[T24] _parse_proxy / _proxy_host_port 兼容历史 SOCKS5 形式"
+
+# 1) socks5://host:port:user:pass → socks5://user:pass@host:port
+out=$(bash -c "source '$PROJECT_DIR/src/utils.sh'; _parse_proxy 'socks5://1.2.3.4:1080:user:pass'")
+[[ "$out" == "socks5://user:pass@1.2.3.4:1080" ]] \
+    && pass "legacy socks5 规范化: $out" \
+    || fail "legacy socks5 规范化失败: $out"
+
+# 2) 标准 socks5://user:pass@host:port 不变
+out=$(bash -c "source '$PROJECT_DIR/src/utils.sh'; _parse_proxy 'socks5://user:pass@1.2.3.4:1080'")
+[[ "$out" == "socks5://user:pass@1.2.3.4:1080" ]] \
+    && pass "标准 socks5 不变: $out" \
+    || fail "标准 socks5 被改写: $out"
+
+# 3) host:port:user:pass（无协议）→ http://user:pass@host:port
+out=$(bash -c "source '$PROJECT_DIR/src/utils.sh'; _parse_proxy '1.2.3.4:1080:user:pass'")
+[[ "$out" == "http://user:pass@1.2.3.4:1080" ]] \
+    && pass "裸 host:port:user:pass 规范化: $out" \
+    || fail "裸 host:port:user:pass 规范化失败: $out"
+
+# 4) _proxy_host_port 处理历史 SOCKS5 形式
+out=$(bash -c "source '$PROJECT_DIR/src/utils.sh'; _proxy_host_port 'socks5://1.2.3.4:1080:user:pass'")
+[[ "$out" == "1.2.3.4:1080" ]] \
+    && pass "_proxy_host_port 历史形式: $out" \
+    || fail "_proxy_host_port 历史形式失败: $out"
+
 # ── 总结 ──
 echo ""
 echo "════════════════════════════════════════════════════════"

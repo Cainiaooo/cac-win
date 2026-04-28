@@ -3,7 +3,7 @@
 _relay_start() {
     local name="${1:-$(_current_env)}"
     local env_dir="$ENVS_DIR/$name"
-    local proxy; proxy=$(_read "$env_dir/proxy")
+    local proxy; proxy=$(_parse_proxy "$(_read "$env_dir/proxy")")
     [[ -z "$proxy" ]] && return 1
 
     local relay_js="$CAC_DIR/relay.js"
@@ -181,7 +181,7 @@ cmd_relay() {
 
             # --route flag: add direct route
             if [[ "$flag" == "--route" ]]; then
-                local proxy; proxy=$(_read "$env_dir/proxy")
+                local proxy; proxy=$(_parse_proxy "$(_read "$env_dir/proxy")")
                 _relay_add_route "$proxy"
             fi
 
