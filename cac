@@ -3315,7 +3315,7 @@ _download_version() {
     local ver="$1"
     local platform; platform=$(_detect_platform) || _die "unsupported platform"
     local dest_dir="$VERSIONS_DIR/$ver"
-    local dest=$(_version_binary "$ver")
+    local dest; dest=$(_version_binary "$ver")
 
     if [[ -x "$dest" ]]; then
         echo "  Already installed: $(_cyan "$ver")"
