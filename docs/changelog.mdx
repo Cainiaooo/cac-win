@@ -5,6 +5,20 @@ description: Release history and notable changes
 
 All notable changes to this project are documented here. Each entry links to the corresponding PR or issue.
 
+## v1.5.8-win.3
+<sub>2026-04-28</sub>
+
+**Fix: env check no longer reports unverified exit IP as healthy**
+
+When a proxy is configured and reachable but all exit-IP probes fail (DNS pollution, blocked endpoints, captive portals), `cac env check` previously displayed `✓ exit IP run again to detect exit IP` and reported "all good" overall. This was misleading — the diagnostic genuinely could not verify proxy traffic, and that should surface as a problem.
+
+- Change the failed-probe branch to render in red (`✗ exit IP unable to verify via proxy`).
+- Record the failure in the `problems` list so the final summary reflects it.
+
+This is a diagnostic-accuracy fix, not a proxy connectivity change. Healthy proxies that pass exit-IP detection are unaffected.
+
+Ports the second hunk of upstream `902728b` (deferred from T02).
+
 ## v1.5.8-win.2
 <sub>2026-04-28 (fork)</sub>
 

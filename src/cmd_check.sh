@@ -298,7 +298,8 @@ try {
                     fi
                 fi
             else
-                printf "\r    $(_green "✓") exit IP    $(_dim "run again to detect exit IP")\033[K\n"
+                printf "\r    $(_red "✗") exit IP    $(_dim "unable to verify via proxy")\033[K\n"
+                problems+=("exit IP undetected via proxy")
             fi
 
             # TUN conflict detection
