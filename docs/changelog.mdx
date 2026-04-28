@@ -5,6 +5,13 @@ description: Release history and notable changes
 
 All notable changes to this project are documented here. Each entry links to the corresponding PR or issue.
 
+## v1.5.8-win.0
+<sub>2026-04-28 (fork)</sub>
+
+**Fix: `--clone` now inherits `~/.claude/agents/`**
+
+`cac env create --clone` previously copied `commands`, `hooks`, `skills`, and `plugins`, but missed `agents/`. Newly cloned environments lost subagent configuration. `agents` is now part of `clone_dirs` so subagents follow the rest of the cloned config. Top-level `cac env help` also documents `--clone [source]` and `--no-link`. Ports upstream `966303d` (v1.5.7) and `b5883c2`.
+
 ## v1.5.4
 <sub>2026-04-02</sub>
 

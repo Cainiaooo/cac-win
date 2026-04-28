@@ -236,6 +236,8 @@ ENVS_DIR="$CAC_DIR/envs"
 VERSIONS_DIR="$CAC_DIR/versions"
 mkdir -p "$HOME/.claude" "$ENVS_DIR" "$VERSIONS_DIR/2.1.97"
 echo '{"source":"value","env":{"SOURCE_ONLY":"1"}}' > "$HOME/.claude/settings.json"
+mkdir -p "$HOME/.claude/agents"
+echo '# test agent' > "$HOME/.claude/agents/test.md"
 touch "$VERSIONS_DIR/2.1.97/claude.exe" "$VERSIONS_DIR/2.1.97/claude"
 chmod +x "$VERSIONS_DIR/2.1.97/claude.exe" "$VERSIONS_DIR/2.1.97/claude"
 
@@ -256,6 +258,9 @@ if ( _env_cmd_create copied --clone --no-link -c 2.1.97 ) >/dev/null 2>&1; then
     grep -q '"source": "value"' "$ENVS_DIR/copied/.claude/settings.json" \
         && pass "copy 模式创建时完成一次性 settings merge" \
         || fail "copy 模式未完成一次性 settings merge"
+    [[ -f "$ENVS_DIR/copied/.claude/agents/test.md" ]] \
+        && pass "clone 包含 agents 目录" \
+        || fail "clone 未复制 agents 目录"
 else
     fail "_env_cmd_create --clone --no-link 失败"
 fi

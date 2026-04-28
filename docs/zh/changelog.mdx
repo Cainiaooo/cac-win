@@ -5,6 +5,13 @@ description: 版本发布历史和重要变更
 
 所有重要变更记录在此，每个条目关联对应的 PR 或 Issue。
 
+## v1.5.8-win.0
+<sub>2026-04-28（fork）</sub>
+
+**修复：`--clone` 现在也会继承 `~/.claude/agents/`**
+
+`cac env create --clone` 之前只复制 `commands`、`hooks`、`skills`、`plugins`，漏掉了 `agents/`，新建环境的子代理（subagent）配置会丢失。本次将 `agents` 加入 `clone_dirs`，子代理与其他克隆配置一同被继承。同时，顶层 `cac env help` 文档补齐 `--clone [source]` 与 `--no-link`。同步上游 `966303d`（v1.5.7）与 `b5883c2`。
+
 ## v1.5.4
 <sub>2026-04-02</sub>
 
