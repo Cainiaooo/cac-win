@@ -2449,15 +2449,25 @@ _env_cmd_sync() {
 
     mkdir -p "$env_dir/.claude"
 
+    local sync_mode
+    sync_mode=$(_read "$env_dir/clone_mode" "copied")
+    [[ "$sync_mode" == "linked" ]] || sync_mode="copied"
+
     local clone_dirs="commands agents hooks skills plugins"
-    local copied=0
+    local synced=0
     local skipped=0
+    local action="copied"
+    [[ "$sync_mode" == "linked" ]] && action="linked"
     local d
     for d in $clone_dirs; do
         if [[ -d "$src_claude_dir/$d" || -L "$src_claude_dir/$d" ]]; then
             rm -rf "$env_dir/.claude/$d"
-            cp -R -L "$src_claude_dir/$d" "$env_dir/.claude/$d"
-            copied=$((copied + 1))
+            if [[ "$sync_mode" == "linked" ]]; then
+                ln -sf "$src_claude_dir/$d" "$env_dir/.claude/$d"
+            else
+                cp -R -L "$src_claude_dir/$d" "$env_dir/.claude/$d"
+            fi
+            synced=$((synced + 1))
         else
             skipped=$((skipped + 1))
         fi
@@ -2465,14 +2475,19 @@ _env_cmd_sync() {
 
     if [[ -f "$src_claude_dir/CLAUDE.md" || -L "$src_claude_dir/CLAUDE.md" ]]; then
         rm -f "$env_dir/.claude/CLAUDE.md"
-        cp -L "$src_claude_dir/CLAUDE.md" "$env_dir/.claude/CLAUDE.md"
-        copied=$((copied + 1))
+        if [[ "$sync_mode" == "linked" ]]; then
+            ln -sf "$src_claude_dir/CLAUDE.md" "$env_dir/.claude/CLAUDE.md"
+        else
+            cp -L "$src_claude_dir/CLAUDE.md" "$env_dir/.claude/CLAUDE.md"
+            _write_env_claude_md "$env_dir/.claude" "$name" --append
+        fi
+        synced=$((synced + 1))
     else
         skipped=$((skipped + 1))
     fi
 
     echo "$(_green_bold "Synced") $(_bold "$name") $(_dim "from ${src_claude_dir/#$HOME/~}")"
-    echo "  $(_green "+") copied   $copied asset group(s)"
+    echo "  $(_green "+") $action   $synced asset group(s)"
     [[ $skipped -gt 0 ]] && echo "  $(_dim "- skipped  $skipped missing group(s)")"
     echo "  $(_dim "settings.json was not changed")"
 }

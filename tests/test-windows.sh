@@ -289,6 +289,9 @@ if ( _env_cmd_create copied --clone --no-link -c 2.1.97 ) >/dev/null 2>&1; then
         grep -q '# source claude md' "$ENVS_DIR/copied/.claude/CLAUDE.md" \
             && pass "sync 复制 CLAUDE.md" \
             || fail "sync 未复制 CLAUDE.md"
+        grep -q 'cac managed environment' "$ENVS_DIR/copied/.claude/CLAUDE.md" \
+            && pass "sync 保留 copied CLAUDE.md 的 cac 元提示" \
+            || fail "sync 覆盖了 copied CLAUDE.md 的 cac 元提示"
         ! grep -q 'must-not-sync' "$ENVS_DIR/copied/.claude/settings.json" \
             && pass "sync 不同步 settings.json" \
             || fail "sync 错误同步了 settings.json"
@@ -298,6 +301,44 @@ if ( _env_cmd_create copied --clone --no-link -c 2.1.97 ) >/dev/null 2>&1; then
 else
     fail "_env_cmd_create --clone --no-link 失败"
 fi
+
+_ln_log="$tmp_cac/linked-ln.log"
+uname() { echo "Linux"; }
+ln() {
+    printf '%s\n' "$*" >> "$_ln_log"
+    local _args=("$@")
+    local _argc=${#_args[@]}
+    local _src="${_args[$((_argc - 2))]}"
+    local _dst="${_args[$((_argc - 1))]}"
+    rm -rf "$_dst"
+    if [[ -d "$_src" ]]; then
+        mkdir -p "$_dst"
+    else
+        mkdir -p "$(dirname "$_dst")"
+        command cp -L "$_src" "$_dst"
+    fi
+}
+if ( _env_cmd_create linked --clone -c 2.1.97 ) >/dev/null 2>&1; then
+    grep -q '/agents' "$_ln_log" \
+        && pass "link 模式创建 agents symlink" \
+        || fail "link 模式未创建 agents symlink"
+    echo '# linked agent update' > "$HOME/.claude/agents/test.md"
+    : > "$_ln_log"
+    if ( _env_cmd_sync linked ) >/dev/null 2>&1; then
+        grep -q '/agents' "$_ln_log" \
+            && grep -q 'CLAUDE.md' "$_ln_log" \
+            && pass "sync 保留 linked 资产 symlink" \
+            || fail "sync 将 linked 资产退化为普通复制"
+        [[ "$(_read "$ENVS_DIR/linked/clone_mode")" == "linked" ]] \
+            && pass "sync 保留 clone_mode=linked" \
+            || fail "sync 修改了 linked clone_mode"
+    else
+        fail "_env_cmd_sync linked 失败"
+    fi
+else
+    fail "_env_cmd_create --clone link 模式失败"
+fi
+unset -f uname ln
 
 mkdir -p "$ENVS_DIR/legacy/.claude"
 echo '{"legacy":"merged"}' > "$ENVS_DIR/legacy/.claude/settings.json"
