@@ -1,5 +1,25 @@
 # ── cmd: env (environment management, like "uv venv") ────────────
 
+_env_clone_source_dir() {
+    local source="${1:-host}"
+    local src_claude_dir=""
+
+    if [[ "$source" == "host" ]]; then
+        src_claude_dir="$HOME/.claude"
+    elif [[ -d "$ENVS_DIR/$source/.claude" ]]; then
+        src_claude_dir="$ENVS_DIR/$source/.claude"
+    elif [[ -d "$source/.claude" ]]; then
+        src_claude_dir="$source/.claude"
+    elif [[ -d "$source" ]]; then
+        src_claude_dir="$source"
+    else
+        _die "clone source '$source' not found"
+    fi
+
+    [[ -d "$src_claude_dir" ]] || _die "clone source '$source' has no .claude directory"
+    echo "$src_claude_dir"
+}
+
 _env_cmd_create() {
     _require_setup
     local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true persona="" claude_auto_update=false
@@ -127,11 +147,7 @@ _env_cmd_create() {
     # Clone config from source
     if [[ -n "$clone_source" ]]; then
         local src_claude_dir
-        if [[ "$clone_source" == "host" ]]; then
-            src_claude_dir="$HOME/.claude"
-        elif [[ -d "$ENVS_DIR/$clone_source/.claude" ]]; then
-            src_claude_dir="$ENVS_DIR/$clone_source/.claude"
-        else
+        if ! src_claude_dir=$(_env_clone_source_dir "$clone_source" 2>/dev/null); then
             echo "  $(_yellow "⚠") clone source '$clone_source' not found, skipping" >&2
             clone_source=""
         fi
@@ -297,6 +313,78 @@ _env_cmd_detach() {
     rm -f "$env_dir/clone_source" "$env_dir/.claude/settings.override.json"
     echo "copied" > "$env_dir/clone_mode"
     echo "$(_green_bold "Detached") $(_bold "$name") $(_dim "from clone source; settings are now independent.")"
+}
+
+_env_cmd_sync() {
+    _require_setup
+    local name="" source="host"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --from|-s)
+                [[ $# -ge 2 ]] || _die "$1 requires a value"
+                source="$2"
+                shift 2
+                ;;
+            -h|--help)
+                echo "usage: cac env sync [name] [source]"
+                echo "       cac env sync [name] --from <host|env|path>"
+                return
+                ;;
+            -*)
+                _die "unknown option: $1"
+                ;;
+            *)
+                if [[ -z "$name" ]]; then
+                    name="$1"
+                elif [[ "$source" == "host" ]]; then
+                    source="$1"
+                else
+                    _die "extra argument: $1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$name" ]]; then
+        name=$(_current_env)
+        [[ -n "$name" ]] || _die "no active environment — specify env name"
+    fi
+    _require_env "$name"
+
+    local env_dir="$ENVS_DIR/$name"
+    local src_claude_dir
+    src_claude_dir=$(_env_clone_source_dir "$source")
+
+    mkdir -p "$env_dir/.claude"
+
+    local clone_dirs="commands agents hooks skills plugins"
+    local copied=0
+    local skipped=0
+    local d
+    for d in $clone_dirs; do
+        if [[ -d "$src_claude_dir/$d" || -L "$src_claude_dir/$d" ]]; then
+            rm -rf "$env_dir/.claude/$d"
+            cp -R -L "$src_claude_dir/$d" "$env_dir/.claude/$d"
+            copied=$((copied + 1))
+        else
+            skipped=$((skipped + 1))
+        fi
+    done
+
+    if [[ -f "$src_claude_dir/CLAUDE.md" || -L "$src_claude_dir/CLAUDE.md" ]]; then
+        rm -f "$env_dir/.claude/CLAUDE.md"
+        cp -L "$src_claude_dir/CLAUDE.md" "$env_dir/.claude/CLAUDE.md"
+        copied=$((copied + 1))
+    else
+        skipped=$((skipped + 1))
+    fi
+
+    echo "$(_green_bold "Synced") $(_bold "$name") $(_dim "from ${src_claude_dir/#$HOME/~}")"
+    echo "  $(_green "+") copied   $copied asset group(s)"
+    [[ $skipped -gt 0 ]] && echo "  $(_dim "- skipped  $skipped missing group(s)")"
+    echo "  $(_dim "settings.json was not changed")"
 }
 
 _env_cmd_activate() {
@@ -492,6 +580,7 @@ cmd_env() {
     case "${1:-help}" in
         create)       _env_cmd_create "${@:2}" ;;
         set)          _env_cmd_set "${@:2}" ;;
+        sync)         _env_cmd_sync "${@:2}" ;;
         detach)       _env_cmd_detach "${@:2}" ;;
         ls|list)      _env_cmd_ls ;;
         rm|remove)    _env_cmd_rm "${@:2}" ;;
@@ -508,6 +597,8 @@ cmd_env() {
             echo "                             Create isolated environment (auto-activates)"
             echo "    $(_green "set") [name] <key> <value>        Modify environment"
             echo "                             proxy, version, telemetry, persona, autoupdate, tz, or lang"
+            echo "    $(_green "sync") [name] [source]            Copy commands, agents, hooks, skills, plugins, CLAUDE.md"
+            echo "                             source defaults to host; settings.json is not copied"
             echo "    $(_green "detach") <name>   Stop cloned settings from syncing with the source"
             echo "    $(_green "ls")              List all environments"
             echo "    $(_green "rm") <name>       Remove an environment"

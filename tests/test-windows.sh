@@ -261,6 +261,40 @@ if ( _env_cmd_create copied --clone --no-link -c 2.1.97 ) >/dev/null 2>&1; then
     [[ -f "$ENVS_DIR/copied/.claude/agents/test.md" ]] \
         && pass "clone 包含 agents 目录" \
         || fail "clone 未复制 agents 目录"
+
+    mkdir -p "$HOME/.claude/commands" "$HOME/.claude/hooks" "$HOME/.claude/skills" "$HOME/.claude/plugins"
+    echo '# updated agent' > "$HOME/.claude/agents/test.md"
+    echo 'new command' > "$HOME/.claude/commands/new.md"
+    echo 'new hook' > "$HOME/.claude/hooks/new.sh"
+    echo 'new skill' > "$HOME/.claude/skills/new.md"
+    echo 'new plugin' > "$HOME/.claude/plugins/new.md"
+    echo '# source claude md' > "$HOME/.claude/CLAUDE.md"
+    echo '{"source":"changed","env":{"SOURCE_ONLY":"2"},"newSetting":"must-not-sync"}' > "$HOME/.claude/settings.json"
+    mkdir -p "$ENVS_DIR/copied/.claude/skills"
+    echo 'stale skill' > "$ENVS_DIR/copied/.claude/skills/stale.md"
+
+    if ( _env_cmd_sync copied ) >/dev/null 2>&1; then
+        [[ -f "$ENVS_DIR/copied/.claude/commands/new.md" ]] \
+            && [[ -f "$ENVS_DIR/copied/.claude/hooks/new.sh" ]] \
+            && [[ -f "$ENVS_DIR/copied/.claude/skills/new.md" ]] \
+            && [[ -f "$ENVS_DIR/copied/.claude/plugins/new.md" ]] \
+            && pass "sync 复制 commands/hooks/skills/plugins" \
+            || fail "sync 未复制 clone 资产目录"
+        grep -q '# updated agent' "$ENVS_DIR/copied/.claude/agents/test.md" \
+            && pass "sync 刷新已有 agents 内容" \
+            || fail "sync 未刷新 agents 内容"
+        [[ ! -f "$ENVS_DIR/copied/.claude/skills/stale.md" ]] \
+            && pass "sync 刷新目标目录并移除旧文件" \
+            || fail "sync 未移除目标目录旧文件"
+        grep -q '# source claude md' "$ENVS_DIR/copied/.claude/CLAUDE.md" \
+            && pass "sync 复制 CLAUDE.md" \
+            || fail "sync 未复制 CLAUDE.md"
+        ! grep -q 'must-not-sync' "$ENVS_DIR/copied/.claude/settings.json" \
+            && pass "sync 不同步 settings.json" \
+            || fail "sync 错误同步了 settings.json"
+    else
+        fail "_env_cmd_sync copied 失败"
+    fi
 else
     fail "_env_cmd_create --clone --no-link 失败"
 fi
