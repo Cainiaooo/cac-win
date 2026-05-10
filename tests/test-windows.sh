@@ -261,9 +261,84 @@ if ( _env_cmd_create copied --clone --no-link -c 2.1.97 ) >/dev/null 2>&1; then
     [[ -f "$ENVS_DIR/copied/.claude/agents/test.md" ]] \
         && pass "clone 包含 agents 目录" \
         || fail "clone 未复制 agents 目录"
+
+    mkdir -p "$HOME/.claude/commands" "$HOME/.claude/hooks" "$HOME/.claude/skills" "$HOME/.claude/plugins"
+    echo '# updated agent' > "$HOME/.claude/agents/test.md"
+    echo 'new command' > "$HOME/.claude/commands/new.md"
+    echo 'new hook' > "$HOME/.claude/hooks/new.sh"
+    echo 'new skill' > "$HOME/.claude/skills/new.md"
+    echo 'new plugin' > "$HOME/.claude/plugins/new.md"
+    echo '# source claude md' > "$HOME/.claude/CLAUDE.md"
+    echo '{"source":"changed","env":{"SOURCE_ONLY":"2"},"newSetting":"must-not-sync"}' > "$HOME/.claude/settings.json"
+    mkdir -p "$ENVS_DIR/copied/.claude/skills"
+    echo 'stale skill' > "$ENVS_DIR/copied/.claude/skills/stale.md"
+
+    if ( _env_cmd_sync copied ) >/dev/null 2>&1; then
+        [[ -f "$ENVS_DIR/copied/.claude/commands/new.md" ]] \
+            && [[ -f "$ENVS_DIR/copied/.claude/hooks/new.sh" ]] \
+            && [[ -f "$ENVS_DIR/copied/.claude/skills/new.md" ]] \
+            && [[ -f "$ENVS_DIR/copied/.claude/plugins/new.md" ]] \
+            && pass "sync 复制 commands/hooks/skills/plugins" \
+            || fail "sync 未复制 clone 资产目录"
+        grep -q '# updated agent' "$ENVS_DIR/copied/.claude/agents/test.md" \
+            && pass "sync 刷新已有 agents 内容" \
+            || fail "sync 未刷新 agents 内容"
+        [[ ! -f "$ENVS_DIR/copied/.claude/skills/stale.md" ]] \
+            && pass "sync 刷新目标目录并移除旧文件" \
+            || fail "sync 未移除目标目录旧文件"
+        grep -q '# source claude md' "$ENVS_DIR/copied/.claude/CLAUDE.md" \
+            && pass "sync 复制 CLAUDE.md" \
+            || fail "sync 未复制 CLAUDE.md"
+        grep -q 'cac managed environment' "$ENVS_DIR/copied/.claude/CLAUDE.md" \
+            && pass "sync 保留 copied CLAUDE.md 的 cac 元提示" \
+            || fail "sync 覆盖了 copied CLAUDE.md 的 cac 元提示"
+        ! grep -q 'must-not-sync' "$ENVS_DIR/copied/.claude/settings.json" \
+            && pass "sync 不同步 settings.json" \
+            || fail "sync 错误同步了 settings.json"
+    else
+        fail "_env_cmd_sync copied 失败"
+    fi
 else
     fail "_env_cmd_create --clone --no-link 失败"
 fi
+
+_ln_log="$tmp_cac/linked-ln.log"
+uname() { echo "Linux"; }
+ln() {
+    printf '%s\n' "$*" >> "$_ln_log"
+    local _args=("$@")
+    local _argc=${#_args[@]}
+    local _src="${_args[$((_argc - 2))]}"
+    local _dst="${_args[$((_argc - 1))]}"
+    rm -rf "$_dst"
+    if [[ -d "$_src" ]]; then
+        mkdir -p "$_dst"
+    else
+        mkdir -p "$(dirname "$_dst")"
+        command cp -L "$_src" "$_dst"
+    fi
+}
+if ( _env_cmd_create linked --clone -c 2.1.97 ) >/dev/null 2>&1; then
+    grep -q '/agents' "$_ln_log" \
+        && pass "link 模式创建 agents symlink" \
+        || fail "link 模式未创建 agents symlink"
+    echo '# linked agent update' > "$HOME/.claude/agents/test.md"
+    : > "$_ln_log"
+    if ( _env_cmd_sync linked ) >/dev/null 2>&1; then
+        grep -q '/agents' "$_ln_log" \
+            && grep -q 'CLAUDE.md' "$_ln_log" \
+            && pass "sync 保留 linked 资产 symlink" \
+            || fail "sync 将 linked 资产退化为普通复制"
+        [[ "$(_read "$ENVS_DIR/linked/clone_mode")" == "linked" ]] \
+            && pass "sync 保留 clone_mode=linked" \
+            || fail "sync 修改了 linked clone_mode"
+    else
+        fail "_env_cmd_sync linked 失败"
+    fi
+else
+    fail "_env_cmd_create --clone link 模式失败"
+fi
+unset -f uname ln
 
 mkdir -p "$ENVS_DIR/legacy/.claude"
 echo '{"legacy":"merged"}' > "$ENVS_DIR/legacy/.claude/settings.json"
