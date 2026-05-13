@@ -201,6 +201,112 @@ s.on('error', () => process.exit(1));
 " "$host" "$port" "$timeout_sec" >/dev/null 2>&1
 }
 
+_relay_new_token() {
+    local token=""
+    token=$(node -e "process.stdout.write(require('crypto').randomBytes(16).toString('hex'))" 2>/dev/null || true)
+    if [[ -n "$token" ]]; then
+        printf '%s' "$token"
+        return 0
+    fi
+    if command -v uuidgen >/dev/null 2>&1; then
+        uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]'
+        return 0
+    fi
+    if [[ -r /dev/urandom ]]; then
+        od -An -tx1 -N16 /dev/urandom | tr -d ' \n'
+        return 0
+    fi
+    printf '%08x%08x%08x%08x' "$RANDOM" "$RANDOM" "$RANDOM" "$RANDOM" | tr '[:upper:]' '[:lower:]'
+}
+
+_relay_verify_listener() {
+    local port="$1" token="$2" timeout_sec="${3:-2}"
+    [[ -n "$port" ]] && [[ -n "$token" ]] || return 1
+    node -e "
+const http = require('http');
+const port = Number(process.argv[1]);
+const token = process.argv[2];
+const timeoutMs = Number(process.argv[3]) * 1000;
+const req = http.request({
+  host: '127.0.0.1',
+  port,
+  path: '/__cac_relay_health__/' + token,
+  method: 'GET',
+  timeout: timeoutMs,
+  headers: { Connection: 'close' }
+}, function(res) {
+  const replyToken = res.headers['x-cac-relay-token'];
+  res.resume();
+  res.on('end', function() {
+    process.exit(res.statusCode === 204 && replyToken === token ? 0 : 1);
+  });
+});
+req.on('timeout', function() { req.destroy(); process.exit(1); });
+req.on('error', function() { process.exit(1); });
+req.end();
+" "$port" "$token" "$timeout_sec" >/dev/null 2>&1
+}
+
+_relay_instances_dir() {
+    echo "$CAC_DIR/relay.instances"
+}
+
+_relay_instance_write() {
+    local token="$1" port="$2" pid="$3"
+    local dir; dir=$(_relay_instances_dir)
+    [[ -n "$token" ]] && [[ -n "$port" ]] && [[ -n "$pid" ]] || return 1
+    mkdir -p "$dir"
+    echo "$pid" > "$dir/$token.pid"
+    echo "$port" > "$dir/$token.port"
+}
+
+_relay_instance_remove() {
+    local token="$1"
+    local dir; dir=$(_relay_instances_dir)
+    [[ -n "$token" ]] || return 0
+    rm -f "$dir/$token.pid" "$dir/$token.port"
+}
+
+_relay_pid_is_cac_owned() {
+    local pid="$1"
+    local dir; dir=$(_relay_instances_dir)
+    [[ -n "$pid" ]] || return 1
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    if [[ -d "$dir" ]]; then
+        local pid_file token port saved_pid
+        for pid_file in "$dir"/*.pid; do
+            [[ -f "$pid_file" ]] || continue
+            token=$(basename "$pid_file" .pid)
+            saved_pid=$(tr -d '[:space:]' < "$pid_file" 2>/dev/null || true)
+            [[ "$saved_pid" == "$pid" ]] || continue
+            port=$(tr -d '[:space:]' < "$dir/$token.port" 2>/dev/null || true)
+            _relay_verify_listener "$port" "$token" && return 0
+        done
+    fi
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            local relay_js relay_native relay_b64
+            relay_js="$CAC_DIR/relay.js"
+            [[ -f "$relay_js" ]] || return 1
+            relay_native=$(_native_path "$relay_js")
+            relay_b64=$(node -e "process.stdout.write(Buffer.from(process.argv[1], 'utf8').toString('base64'))" "$relay_native" 2>/dev/null) || return 1
+            powershell.exe -NoProfile -Command "
+                try {
+                    \$relayPath = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$relay_b64'))
+                    \$proc = Get-CimInstance Win32_Process -Filter \"ProcessId=$pid\" -ErrorAction Stop
+                    if (\$proc -and \$proc.CommandLine -and \$proc.CommandLine.IndexOf(\$relayPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { exit 0 }
+                } catch {}
+                exit 1
+            " >/dev/null 2>&1
+            ;;
+        *)
+            local relay_js="$CAC_DIR/relay.js"
+            [[ -f "$relay_js" ]] || return 1
+            ps -p "$pid" -o args= 2>/dev/null | awk -v relay="$relay_js" 'index($0, relay) { found=1 } END { exit(found ? 0 : 1) }'
+            ;;
+    esac
+}
+
 _proxy_reachable() {
     local hp host port
     hp=$(_proxy_host_port "$1")

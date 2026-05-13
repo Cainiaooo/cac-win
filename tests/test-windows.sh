@@ -25,6 +25,27 @@ echo "════════════════════════�
 # source utils
 source "$PROJECT_DIR/src/utils.sh" 2>/dev/null || { echo "FATAL: cannot source utils.sh"; exit 1; }
 source "$PROJECT_DIR/src/cmd_claude.sh" 2>/dev/null || { echo "FATAL: cannot source cmd_claude.sh"; exit 1; }
+source "$PROJECT_DIR/src/cmd_relay.sh" 2>/dev/null || { echo "FATAL: cannot source cmd_relay.sh"; exit 1; }
+
+cleanup_bg_pid() {
+    local pid="${1:-}"
+    [[ -n "$pid" ]] || return 0
+    kill "$pid" 2>/dev/null || true
+    if is_windows; then
+        taskkill.exe //F //PID "$pid" >/dev/null 2>&1 || true
+    fi
+    wait "$pid" 2>/dev/null || true
+}
+
+wait_for_relay() {
+    local port="$1" token="$2"
+    local _i
+    for _i in {1..30}; do
+        _relay_verify_listener "$port" "$token" && return 0
+        sleep 0.1
+    done
+    return 1
+}
 
 # ── T01: 平台检测 ──
 echo ""
@@ -51,6 +72,81 @@ if is_windows; then
 else
     skip "Windows 专项（Linux 下 _tcp_check 走原生 /dev/tcp）"
 fi
+
+# ── T02a: relay token 生成 ──
+echo ""
+echo "[T02a] relay token 生成 (_relay_new_token)"
+relay_token_sample=$(_relay_new_token)
+[[ "$relay_token_sample" =~ ^[0-9a-f]{32}$ ]] && pass "relay token 格式正确" || fail "relay token 格式异常: $relay_token_sample"
+
+# ── T02b: relay 身份探针 ──
+echo ""
+echo "[T02b] relay 身份探针 (_relay_verify_listener)"
+tmpcac=$(mktemp -d)
+cp "$PROJECT_DIR/src/relay.js" "$tmpcac/relay.js"
+CAC_DIR="$tmpcac"
+relay_token="test-relay-token"
+node "$tmpcac/relay.js" 19884 "http://127.0.0.1:65534" "$tmpcac/relay.pid" "$relay_token" >/dev/null 2>&1 &
+relay_pid=$!
+if wait_for_relay 19884 "$relay_token"; then
+    pass "真实 cac relay 可通过 token 验证"
+else
+    fail "真实 cac relay 未通过 token 验证"
+fi
+! _relay_verify_listener 19884 "wrong-token" && pass "错误 token 不会误判 relay" || fail "错误 token 被误判为 relay"
+cleanup_bg_pid "$relay_pid"
+
+node -e "require('http').createServer((req,res)=>{res.writeHead(200);res.end('ok');}).listen(19887,'127.0.0.1')" >/dev/null 2>&1 &
+dummy_pid=$!
+sleep 0.3
+! _relay_verify_listener 19887 "$relay_token" && pass "无关本地监听不会被当成 relay" || fail "无关本地监听被误判为 relay"
+cleanup_bg_pid "$dummy_pid"
+rm -rf "$tmpcac"
+
+# ── T02c: orphan cleanup 仅处理 cac 自己的 relay ──
+echo ""
+echo "[T02c] orphan cleanup 精确匹配 relay 路径"
+tmpcac=$(mktemp -d)
+otherdir=$(mktemp -d)
+cp "$PROJECT_DIR/src/relay.js" "$tmpcac/relay.js"
+printf '%s\n' "setInterval(function() {}, 1000);" > "$otherdir/relay.js"
+CAC_DIR="$tmpcac"
+mkdir -p "$tmpcac/relay.instances"
+
+node "$tmpcac/relay.js" 19885 "http://127.0.0.1:65534" "$tmpcac/relay.pid" "keep-token" >/dev/null 2>&1 &
+keep_pid=$!
+if ! wait_for_relay 19885 "keep-token"; then
+    fail "当前 relay 未成功启动"
+fi
+printf '%s' "19885" > "$tmpcac/relay.port"
+printf '%s' "http://127.0.0.1:65534" > "$tmpcac/relay.proxy"
+printf '%s' "keep-token" > "$tmpcac/relay.token"
+actual_keep_pid=$(tr -d '[:space:]' < "$tmpcac/relay.pid")
+printf '%s' "$actual_keep_pid" > "$tmpcac/relay.instances/keep-token.pid"
+printf '%s' "19885" > "$tmpcac/relay.instances/keep-token.port"
+
+node "$tmpcac/relay.js" 19886 "http://127.0.0.1:65534" "$tmpcac/orphan.pid" "orphan-token" >/dev/null 2>&1 &
+orphan_pid=$!
+if ! wait_for_relay 19886 "orphan-token"; then
+    fail "孤儿 relay 未成功启动"
+fi
+actual_orphan_pid=$(tr -d '[:space:]' < "$tmpcac/orphan.pid")
+printf '%s' "$actual_orphan_pid" > "$tmpcac/relay.instances/orphan-token.pid"
+printf '%s' "19886" > "$tmpcac/relay.instances/orphan-token.port"
+
+node "$otherdir/relay.js" >/dev/null 2>&1 &
+other_pid=$!
+sleep 0.5
+
+_relay_kill_orphans
+kill -0 "$keep_pid" 2>/dev/null && pass "当前 cac relay 被保留" || fail "当前 cac relay 被误杀"
+! kill -0 "$orphan_pid" 2>/dev/null && pass "孤儿 cac relay 被清理" || fail "孤儿 cac relay 未清理"
+kill -0 "$other_pid" 2>/dev/null && pass "无关 relay.js 进程未被误杀" || fail "无关 relay.js 进程被误杀"
+
+cleanup_bg_pid "$keep_pid"
+cleanup_bg_pid "$orphan_pid"
+cleanup_bg_pid "$other_pid"
+rm -rf "$tmpcac" "$otherdir"
 
 # ── T03: python3 零残留 ──
 echo ""

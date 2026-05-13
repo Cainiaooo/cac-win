@@ -23,20 +23,6 @@ cmd_delete() {
             echo "  ✓ stopped docker port-forward processes"
         fi
 
-        # fallback: clean up orphaned relay processes
-        case "$(uname -s)" in
-            MINGW*|MSYS*|CYGWIN*)
-                # Windows: use tasklist + taskkill
-                while IFS= read -r _pid; do
-                    taskkill.exe //F //PID "$_pid" 2>/dev/null || true
-                done < <(tasklist.exe //FI "IMAGENAME eq node.exe" //FO CSV //NH 2>/dev/null \
-                    | grep -i "relay\.js" | sed 's/"//g' | cut -d',' -f2)
-                ;;
-            *)
-                pkill -f "node.*\.cac/relay\.js" 2>/dev/null || true
-                ;;
-        esac
-
         rm -rf "$CAC_DIR"
         echo "  ✓ deleted $CAC_DIR"
     else

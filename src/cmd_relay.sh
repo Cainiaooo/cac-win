@@ -7,7 +7,19 @@ _relay_start() {
     [[ -z "$proxy" ]] && return 1
 
     local relay_js="$CAC_DIR/relay.js"
+    local pid_file="$CAC_DIR/relay.pid"
+    local token_file="$CAC_DIR/relay.token"
     [[ -f "$relay_js" ]] || { echo "error: relay.js not found, reinstall with 'npm i -g claude-cac'" >&2; return 1; }
+
+    if [[ ! -f "$token_file" ]] && [[ -f "$pid_file" ]]; then
+        local legacy_pid; legacy_pid=$(_read "$pid_file")
+        if [[ -n "$legacy_pid" ]] && kill -0 "$legacy_pid" 2>/dev/null && _relay_pid_is_cac_owned "$legacy_pid"; then
+            kill "$legacy_pid" 2>/dev/null || true
+            rm -f "$pid_file" "$CAC_DIR/relay.port" "$CAC_DIR/relay.proxy"
+        fi
+    fi
+
+    _relay_kill_orphans
 
     # find available port (17890-17999)
     local port=17890
@@ -19,32 +31,39 @@ _relay_start() {
         fi
     done
 
-    local pid_file="$CAC_DIR/relay.pid"
-    node "$relay_js" "$port" "$proxy" "$pid_file" </dev/null >"$CAC_DIR/relay.log" 2>&1 &
+    local relay_token; relay_token=$(_relay_new_token)
+    node "$relay_js" "$port" "$proxy" "$pid_file" "$relay_token" </dev/null >"$CAC_DIR/relay.log" 2>&1 &
     disown 2>/dev/null || true
 
     # wait for relay ready
     local _i
     for _i in {1..30}; do
-        _tcp_check 127.0.0.1 "$port" && break
+        _relay_verify_listener "$port" "$relay_token" && break
         sleep 0.1
     done
 
-    if ! _tcp_check 127.0.0.1 "$port"; then
+    if ! _relay_verify_listener "$port" "$relay_token"; then
         echo "error: relay startup timeout" >&2
         return 1
     fi
 
+    local relay_pid; relay_pid=$(_read "$pid_file")
     echo "$proxy" > "$CAC_DIR/relay.proxy"
     echo "$port" > "$CAC_DIR/relay.port"
+    echo "$relay_token" > "$token_file"
+    if [[ "$relay_pid" =~ ^[0-9]+$ ]]; then
+        _relay_instance_write "$relay_token" "$port" "$relay_pid" 2>/dev/null || true
+    fi
     return 0
 }
 
 _relay_stop() {
     local pid_file="$CAC_DIR/relay.pid"
+    local token_file="$CAC_DIR/relay.token"
+    local relay_token; relay_token=$(_read "$token_file")
     if [[ -f "$pid_file" ]]; then
         local pid; pid=$(tr -d '[:space:]' < "$pid_file")
-        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && _relay_pid_is_cac_owned "$pid"; then
             kill "$pid" 2>/dev/null || true
             # wait for process exit
             local _i
@@ -55,7 +74,8 @@ _relay_stop() {
         fi
         rm -f "$pid_file"
     fi
-    rm -f "$CAC_DIR/relay.port" "$CAC_DIR/relay.proxy"
+    rm -f "$CAC_DIR/relay.port" "$CAC_DIR/relay.proxy" "$token_file"
+    _relay_instance_remove "$relay_token"
 
     # stop watchdog (relay.proxy already removed above, watchdog will self-exit within 5s;
     # kill it immediately for clean teardown)
@@ -68,13 +88,58 @@ _relay_stop() {
 
     # cleanup route
     _relay_remove_route 2>/dev/null || true
+
+    _relay_kill_orphans
+}
+
+_relay_kill_orphans() {
+    local dir; dir=$(_relay_instances_dir)
+    local keep_token="" token pid port pid_file
+    [[ -d "$dir" ]] || return 0
+    if [[ -f "$CAC_DIR/relay.token" ]] && [[ -f "$CAC_DIR/relay.port" ]]; then
+        local current_token current_port
+        current_token=$(_read "$CAC_DIR/relay.token")
+        current_port=$(_read "$CAC_DIR/relay.port")
+        [[ -n "$current_token" ]] && [[ -n "$current_port" ]] && _relay_verify_listener "$current_port" "$current_token" 2>/dev/null && keep_token="$current_token"
+    fi
+    for pid_file in "$dir"/*.pid; do
+        [[ -f "$pid_file" ]] || continue
+        token=$(basename "$pid_file" .pid)
+        [[ -n "$keep_token" && "$token" == "$keep_token" ]] && continue
+        pid=$(_read "$pid_file")
+        port=$(_read "$dir/$token.port")
+        [[ "$pid" =~ ^[0-9]+$ ]] || { _relay_instance_remove "$token"; continue; }
+        if [[ -n "$pid" ]] && [[ -n "$port" ]] && _relay_verify_listener "$port" "$token" 2>/dev/null; then
+            case "$(uname -s)" in
+                MINGW*|MSYS*|CYGWIN*) taskkill.exe //F //PID "$pid" >/dev/null 2>&1 || true ;;
+                *) kill "$pid" 2>/dev/null || true ;;
+            esac
+        fi
+        _relay_instance_remove "$token"
+    done
 }
 
 _relay_is_running() {
+    # primary: verify the recorded listener really is cac relay
+    if [[ -f "$CAC_DIR/relay.port" ]] && [[ -f "$CAC_DIR/relay.token" ]]; then
+        local port token
+        port=$(tr -d '[:space:]' < "$CAC_DIR/relay.port")
+        token=$(tr -d '[:space:]' < "$CAC_DIR/relay.token")
+        [[ -n "$port" ]] && [[ -n "$token" ]] && _relay_verify_listener "$port" "$token" 2>/dev/null && return 0
+    fi
+    # fallback for pre-token relays: PID must still be the exact cac relay process
     local pid_file="$CAC_DIR/relay.pid"
     [[ -f "$pid_file" ]] || return 1
     local pid; pid=$(tr -d '[:space:]' < "$pid_file")
-    [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && _relay_pid_is_cac_owned "$pid"; then
+        if [[ -f "$CAC_DIR/relay.port" ]]; then
+            local port; port=$(tr -d '[:space:]' < "$CAC_DIR/relay.port")
+            [[ -n "$port" ]] && _tcp_check 127.0.0.1 "$port" 2>/dev/null
+            return $?
+        fi
+        return 0
+    fi
+    return 1
 }
 
 # ── route management (direct route to bypass TUN) ──────────────────────────────
@@ -226,11 +291,17 @@ cmd_relay() {
                 echo "Direct route: $route_ip"
             fi
             ;;
+        cleanup)
+            echo "Scanning for orphaned relay processes..."
+            _relay_kill_orphans
+            echo "$(_green "✓") Orphaned relay processes cleaned up"
+            ;;
         *)
-            echo "usage: cac relay [on|off|status]" >&2
+            echo "usage: cac relay [on|off|status|cleanup]" >&2
             echo "  on [--route]  enable local relay (--route adds direct route to bypass TUN)" >&2
             echo "  off           disable local relay" >&2
             echo "  status        show status" >&2
+            echo "  cleanup       kill all orphaned relay processes" >&2
             ;;
     esac
 }

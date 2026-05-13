@@ -201,6 +201,111 @@ s.on('error', () => process.exit(1));
 " "$host" "$port" "$timeout_sec" >/dev/null 2>&1
 }
 
+_relay_new_token() {
+    local token=""
+    token=$(node -e "process.stdout.write(require('crypto').randomBytes(16).toString('hex'))" 2>/dev/null || true)
+    if [[ -n "$token" ]]; then
+        printf '%s' "$token"
+        return 0
+    fi
+    if command -v uuidgen >/dev/null 2>&1; then
+        uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]'
+        return 0
+    fi
+    if [[ -r /dev/urandom ]]; then
+        od -An -tx1 -N16 /dev/urandom | tr -d ' \n'
+        return 0
+    fi
+    printf '%08x%08x%08x%08x' "$RANDOM" "$RANDOM" "$RANDOM" "$RANDOM" | tr '[:upper:]' '[:lower:]'
+}
+
+_relay_verify_listener() {
+    local port="$1" token="$2" timeout_sec="${3:-2}"
+    [[ -n "$port" ]] && [[ -n "$token" ]] || return 1
+    node -e "
+const http = require('http');
+const port = Number(process.argv[1]);
+const token = process.argv[2];
+const timeoutMs = Number(process.argv[3]) * 1000;
+const req = http.request({
+  host: '127.0.0.1',
+  port,
+  path: '/__cac_relay_health__/' + token,
+  method: 'GET',
+  timeout: timeoutMs,
+  headers: { Connection: 'close' }
+}, function(res) {
+  const replyToken = res.headers['x-cac-relay-token'];
+  res.resume();
+  res.on('end', function() {
+    process.exit(res.statusCode === 204 && replyToken === token ? 0 : 1);
+  });
+});
+req.on('timeout', function() { req.destroy(); process.exit(1); });
+req.on('error', function() { process.exit(1); });
+req.end();
+" "$port" "$token" "$timeout_sec" >/dev/null 2>&1
+}
+
+_relay_instances_dir() {
+    echo "$CAC_DIR/relay.instances"
+}
+
+_relay_instance_write() {
+    local token="$1" port="$2" pid="$3"
+    local dir; dir=$(_relay_instances_dir)
+    [[ -n "$token" ]] && [[ -n "$port" ]] && [[ -n "$pid" ]] || return 1
+    mkdir -p "$dir"
+    echo "$pid" > "$dir/$token.pid"
+    echo "$port" > "$dir/$token.port"
+}
+
+_relay_instance_remove() {
+    local token="$1"
+    local dir; dir=$(_relay_instances_dir)
+    [[ -n "$token" ]] || return 0
+    rm -f "$dir/$token.pid" "$dir/$token.port"
+}
+
+_relay_pid_is_cac_owned() {
+    local pid="$1"
+    local dir; dir=$(_relay_instances_dir)
+    [[ -n "$pid" ]] || return 1
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    if [[ -d "$dir" ]]; then
+        local pid_file token port
+        for pid_file in "$dir"/*.pid; do
+            [[ -f "$pid_file" ]] || continue
+            token=$(basename "$pid_file" .pid)
+            [[ "$(tr -d '[:space:]' < "$pid_file" 2>/dev/null || true)" == "$pid" ]] || continue
+            port=$(tr -d '[:space:]' < "$dir/$token.port" 2>/dev/null || true)
+            _relay_verify_listener "$port" "$token" && return 0
+        done
+    fi
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            local relay_js relay_native relay_b64
+            relay_js="$CAC_DIR/relay.js"
+            [[ -f "$relay_js" ]] || return 1
+            relay_native=$(_native_path "$relay_js")
+            relay_b64=$(node -e "process.stdout.write(Buffer.from(process.argv[1], 'utf8').toString('base64'))" "$relay_native" 2>/dev/null) || return 1
+            powershell.exe -NoProfile -Command "
+                try {
+                    \$relayPath = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$relay_b64'))
+                    \$proc = Get-CimInstance Win32_Process -Filter \"ProcessId=$pid\" -ErrorAction Stop
+                    if (\$proc -and \$proc.CommandLine -and \$proc.CommandLine.IndexOf(\$relayPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { exit 0 }
+                } catch {}
+                exit 1
+            " >/dev/null 2>&1
+            ;;
+        *)
+            local relay_js="$CAC_DIR/relay.js"
+            [[ -f "$relay_js" ]] || return 1
+            ps -p "$pid" -o args= 2>/dev/null | awk -v relay="$relay_js" 'index($0, relay) { found=1 } END { exit(found ? 0 : 1) }'
+            ;;
+    esac
+}
+
 _count_claude_processes() {
     case "$(uname -s)" in
         MINGW*|MSYS*|CYGWIN*)
@@ -542,40 +647,62 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
     _relay_pid_file="$CAC_DIR/relay.pid"
     _relay_port_file="$CAC_DIR/relay.port"
     _relay_proxy_file="$CAC_DIR/relay.proxy"
+    _relay_token_file="$CAC_DIR/relay.token"
 
-    # check if relay is already running
-    _relay_running=false
-    if [[ -f "$_relay_pid_file" ]]; then
-        _rpid=$(tr -d '[:space:]' < "$_relay_pid_file")
-        [[ -n "$_rpid" ]] && kill -0 "$_rpid" 2>/dev/null && _relay_running=true
-    fi
-
-    # kill stale relay if proxy changed (env switch without going through cac activate)
-    # skip if relay.proxy absent (first run after upgrade — assume match)
-    if [[ "$_relay_running" == "true" ]] && [[ -f "$_relay_proxy_file" ]]; then
-        _old_proxy=$(tr -d '[:space:]' < "$_relay_proxy_file")
-        if [[ "$_old_proxy" != "$PROXY" ]]; then
-            kill "$_rpid" 2>/dev/null || true
+    # One-time upgrade migration: replace pre-token relay instances with a
+    # tokenized relay so future reuse and cleanup stay identity-based.
+    if [[ ! -f "$_relay_token_file" ]] && [[ -f "$_relay_pid_file" ]]; then
+        _legacy_rpid=$(tr -d '[:space:]' < "$_relay_pid_file")
+        if [[ -n "$_legacy_rpid" ]] && kill -0 "$_legacy_rpid" 2>/dev/null && _relay_pid_is_cac_owned "$_legacy_rpid"; then
+            kill "$_legacy_rpid" 2>/dev/null || true
             rm -f "$_relay_pid_file" "$_relay_port_file" "$_relay_proxy_file"
-            _relay_running=false
         fi
     fi
 
-    # start if not running
+    # Reuse an existing relay only after it proves identity via the local health
+    # token. A random listener reusing the same localhost port must not be
+    # trusted, or traffic could bypass the configured upstream proxy.
+    _relay_running=false
+    _relay_port=""
+    _relay_token=""
+    if [[ -f "$_relay_port_file" ]] && [[ -f "$_relay_proxy_file" ]] && [[ -f "$_relay_token_file" ]]; then
+        _rport_saved=$(tr -d '[:space:]' < "$_relay_port_file")
+        _rproxy_saved=$(tr -d '[:space:]' < "$_relay_proxy_file")
+        _rtoken_saved=$(tr -d '[:space:]' < "$_relay_token_file")
+        if [[ -n "$_rport_saved" ]] && [[ -n "$_rtoken_saved" ]] && [[ "$_rproxy_saved" == "$PROXY" ]] && _relay_verify_listener "$_rport_saved" "$_rtoken_saved"; then
+            _relay_running=true
+            _relay_port="$_rport_saved"
+            _relay_token="$_rtoken_saved"
+        fi
+    fi
+
+    # start new relay if none usable (does NOT kill old relays — they may serve other sessions)
     if [[ "$_relay_running" != "true" ]]; then
+        _relay_token=$(_relay_new_token)
         _rport=17890
         while _tcp_check 127.0.0.1 "$_rport"; do
             (( _rport++ ))
             [[ $_rport -gt 17999 ]] && break
         done
-        node "$_relay_js" "$_rport" "$PROXY" "$_relay_pid_file" </dev/null >"$CAC_DIR/relay.log" 2>&1 &
-        disown 2>/dev/null || true
-        for _ri in {1..30}; do
-            _tcp_check 127.0.0.1 "$_rport" && break
-            sleep 0.1
-        done
-        echo "$PROXY" > "$_relay_proxy_file"
-        echo "$_rport" > "$_relay_port_file"
+        if [[ $_rport -le 17999 ]]; then
+            node "$_relay_js" "$_rport" "$PROXY" "$_relay_pid_file" "$_relay_token" </dev/null >"$CAC_DIR/relay.log" 2>&1 &
+            disown 2>/dev/null || true
+            for _ri in {1..30}; do
+                _relay_verify_listener "$_rport" "$_relay_token" && break
+                sleep 0.1
+            done
+            if _relay_verify_listener "$_rport" "$_relay_token"; then
+                _rpid_saved=$(tr -d '[:space:]' < "$_relay_pid_file" 2>/dev/null || true)
+                echo "$PROXY" > "$_relay_proxy_file"
+                echo "$_rport" > "$_relay_port_file"
+                echo "$_relay_token" > "$_relay_token_file"
+                if [[ "$_rpid_saved" =~ ^[0-9]+$ ]]; then
+                    _relay_instance_write "$_relay_token" "$_rport" "$_rpid_saved" 2>/dev/null || true
+                fi
+                _relay_running=true
+                _relay_port="$_rport"
+            fi
+        fi
     fi
 
     # env-level watchdog singleton: auto-restarts relay if it crashes
@@ -595,21 +722,47 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
                 sleep 5
                 # relay.proxy removed by _relay_stop — intentional stop, exit watchdog
                 [[ -f "$CAC_DIR/relay.proxy" ]] || exit 0
-                # relay alive and port reachable — nothing to do
-                if [[ -f "$CAC_DIR/relay.pid" ]]; then
-                    _rpid=$(tr -d '[:space:]' < "$CAC_DIR/relay.pid")
-                    if kill -0 "$_rpid" 2>/dev/null; then
-                        _rport=$(tr -d '[:space:]' < "$CAC_DIR/relay.port" 2>/dev/null || true)
-                        _tcp_check 127.0.0.1 "$_rport" && continue
-                        # process alive but port unresponsive — kill and restart
-                        kill "$_rpid" 2>/dev/null || true
-                    fi
-                fi
-                # relay dead — restart on same port with same proxy
                 _rport=$(tr -d '[:space:]' < "$CAC_DIR/relay.port" 2>/dev/null || true)
                 _rproxy=$(tr -d '[:space:]' < "$CAC_DIR/relay.proxy" 2>/dev/null || true)
-                [[ -n "$_rport" ]] && [[ -n "$_rproxy" ]] || exit 0
-                node "$CAC_DIR/relay.js" "$_rport" "$_rproxy" "$CAC_DIR/relay.pid" </dev/null >>"$CAC_DIR/relay.log" 2>&1 &
+                _rtoken=$(tr -d '[:space:]' < "$CAC_DIR/relay.token" 2>/dev/null || true)
+                [[ -n "$_rport" ]] && [[ -n "$_rproxy" ]] && [[ -n "$_rtoken" ]] || exit 0
+
+                # relay identity verified — nothing to do
+                _relay_verify_listener "$_rport" "$_rtoken" && continue
+
+                # If the recorded PID still belongs to cac relay, stop it before restart.
+                if [[ -f "$CAC_DIR/relay.pid" ]]; then
+                    _rpid=$(tr -d '[:space:]' < "$CAC_DIR/relay.pid")
+                    if [[ -n "$_rpid" ]] && kill -0 "$_rpid" 2>/dev/null && _relay_pid_is_cac_owned "$_rpid"; then
+                        kill "$_rpid" 2>/dev/null || true
+                        for _rk in {1..10}; do
+                            kill -0 "$_rpid" 2>/dev/null || break
+                            sleep 0.1
+                        done
+                    fi
+                fi
+
+                # Port taken by something else — move to the next free port instead
+                # of reusing an unverified listener.
+                while _tcp_check 127.0.0.1 "$_rport"; do
+                    _relay_verify_listener "$_rport" "$_rtoken" && continue 2
+                    (( _rport++ ))
+                    [[ $_rport -gt 17999 ]] && break
+                done
+                [[ $_rport -le 17999 ]] || continue
+
+                node "$CAC_DIR/relay.js" "$_rport" "$_rproxy" "$CAC_DIR/relay.pid" "$_rtoken" </dev/null >>"$CAC_DIR/relay.log" 2>&1 &
+                for _rj in {1..30}; do
+                    _relay_verify_listener "$_rport" "$_rtoken" && break
+                    sleep 0.1
+                done
+                if _relay_verify_listener "$_rport" "$_rtoken"; then
+                    _new_rpid=$(tr -d '[:space:]' < "$CAC_DIR/relay.pid" 2>/dev/null || true)
+                    echo "$_rport" > "$CAC_DIR/relay.port"
+                    if [[ "$_new_rpid" =~ ^[0-9]+$ ]]; then
+                        _relay_instance_write "$_rtoken" "$_rport" "$_new_rpid" 2>/dev/null || true
+                    fi
+                fi
             done
         ) &
         _new_wpid=$!
@@ -618,11 +771,10 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
     fi
 
     # override proxy to point to local relay
-    if [[ -f "$_relay_port_file" ]]; then
-        _rport=$(tr -d '[:space:]' < "$_relay_port_file")
-        export HTTPS_PROXY="http://127.0.0.1:$_rport"
-        export HTTP_PROXY="http://127.0.0.1:$_rport"
-        export ALL_PROXY="http://127.0.0.1:$_rport"
+    if [[ "$_relay_running" == "true" ]] && [[ -n "$_relay_port" ]]; then
+        export HTTPS_PROXY="http://127.0.0.1:$_relay_port"
+        export HTTP_PROXY="http://127.0.0.1:$_relay_port"
+        export ALL_PROXY="http://127.0.0.1:$_relay_port"
         _relay_active=true
     fi
 fi

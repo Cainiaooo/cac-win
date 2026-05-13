@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // cac-relay — Local TCP relay that forwards to upstream proxy (bypasses TUN)
-// Usage: node relay.js <listen_port> <upstream_proxy_url> [pid_file]
+// Usage: node relay.js <listen_port> <upstream_proxy_url> [pid_file] [verify_token]
 //
 // Listens on 127.0.0.1:<port> as an HTTP proxy, forwards upstream via:
 //   - HTTP CONNECT (for http:// upstream)
@@ -18,9 +18,10 @@ var fs = require('fs');
 var listenPort = parseInt(process.argv[2], 10);
 var upstreamUrl = process.argv[3];
 var pidFile = process.argv[4];
+var verifyToken = process.argv[5] || '';
 
 if (!listenPort || !upstreamUrl) {
-  process.stderr.write('Usage: node relay.js <port> <upstream_proxy_url> [pid_file]\n');
+  process.stderr.write('Usage: node relay.js <port> <upstream_proxy_url> [pid_file] [verify_token]\n');
   process.exit(1);
 }
 
@@ -212,6 +213,13 @@ var MAX_CONNECTIONS = 128;
 var IDLE_TIMEOUT = 1800000; // 30 min — streaming responses can be very long
 var activeConnections = 0;
 
+function parseControlRequest(firstLine) {
+  var match = firstLine.match(/^(GET|HEAD)\s+([^\s]+)\s+HTTP\/1\.[01]$/i);
+  var expectedPath = '/__cac_relay_health__/' + verifyToken;
+  if (!verifyToken || !match || match[2] !== expectedPath) return null;
+  return { method: match[1].toUpperCase() };
+}
+
 var server = net.createServer({ pauseOnConnect: true }, function(clientSock) {
   if (activeConnections >= MAX_CONNECTIONS) {
     clientSock.destroy();
@@ -235,6 +243,12 @@ var server = net.createServer({ pauseOnConnect: true }, function(clientSock) {
 
     var firstLine = headerBuf.substring(0, idx);
     var rest = headerBuf.substring(idx + 2);
+    var controlReq = parseControlRequest(firstLine);
+
+    if (controlReq) {
+      handleControlRequest(clientSock, rest);
+      return;
+    }
 
     // CONNECT host:port HTTP/1.1
     var match = firstLine.match(/^CONNECT\s+([^\s:]+):(\d+)\s+HTTP/i);
@@ -246,6 +260,29 @@ var server = net.createServer({ pauseOnConnect: true }, function(clientSock) {
     }
   });
 });
+
+function handleControlRequest(clientSock, headerRest) {
+  var restBuf = Buffer.from(headerRest);
+  var consumeHeaders = function() {
+    var endIdx = restBuf.indexOf('\r\n\r\n');
+    if (endIdx !== -1) {
+      var response = 'HTTP/1.1 204 No Content\r\n' +
+                     'X-CAC-Relay-Token: ' + verifyToken + '\r\n' +
+                     'Connection: close\r\n\r\n';
+      try {
+        clientSock.end(response);
+      } catch (_) {
+        clientSock.destroy();
+      }
+      return;
+    }
+    clientSock.once('data', function(chunk) {
+      restBuf = Buffer.concat([restBuf, chunk]);
+      consumeHeaders();
+    });
+  };
+  consumeHeaders();
+}
 
 function handleConnect(clientSock, targetHost, targetPort, headerRest) {
   // Consume remaining headers until \r\n\r\n
