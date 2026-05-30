@@ -3,6 +3,7 @@
 > 记录时间：2026-05-10
 > 状态：Open
 > 范围：Windows fork 当前 `master` 的代理、relay、`cac env check` 诊断机制
+> 补充：代理凭据与环境变量泄露面见 `docs/windows/proxy-environment-leakage-analysis.md`
 
 ## 背景
 

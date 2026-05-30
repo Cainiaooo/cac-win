@@ -4,6 +4,7 @@
 > 状态：Open
 > 范围：cac (全平台)、Claude Code v2.1.139 Agent View (`claude agents`) 功能
 > 关联：[[proxy-mechanism-limitations]]
+> 补充：代理凭据与环境变量泄露面见 `docs/windows/proxy-environment-leakage-analysis.md`
 > 官方文档验证：2026-05-12 已逐条核对，见 [官方文档验证](#官方文档验证) 章节
 
 ## 背景
