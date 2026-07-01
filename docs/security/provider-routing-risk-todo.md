@@ -351,23 +351,73 @@ runtime probe result
 
 ### 10. 增加自动化测试
 
+安全测试原则：
+
+- 默认测试必须是离线、无网络、无真实 Claude 请求、无真实 provider endpoint 访问。
+- 测试必须设置临时 `HOME`、`CAC_DIR`、`ENVS_DIR`、`VERSIONS_DIR`，禁止读写用户真实 `~/.cac`、`%USERPROFILE%\.cac`、`~/.claude`、`%USERPROFILE%\.claude`。
+- 测试必须使用 fake `claude` 二进制或 shell 脚本捕获启动时环境变量，禁止启动本机真实 Claude Code。
+- 测试不得读取、打印或复制真实 `ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、OAuth session、`.claude.json`、MCP credential。
+- 测试不得运行 `cac env create` 的真实 latest/version 下载路径；需要版本时使用本地 fake version binary。
+- 任何需要真实 Claude Code、真实 Bun standalone binary、真实 proxy、真实 network 的验证都必须放到手动测试清单，并在执行前单独申请临时隔离环境。
+
 建议测试文件：
 
 ```text
-tests/provider-routing-managed.bats
-tests/provider-routing-warn.bats
-tests/settings-provider-scan.bats
-tests/signal-guard-strict.bats
-tests/runtime-inspection.bats
+tests/test-provider-routing-managed.sh
+tests/test-provider-routing-warn.sh
+tests/test-settings-provider-scan.sh
+tests/test-signal-guard-strict.sh
+tests/test-runtime-inspection.sh
 ```
 
-最低测试场景：
+隔离环境搭建：
+
+- 每个测试用例用 `mktemp -d` 创建独立 sandbox，并在 `trap` 中清理。
+- 设置 `HOME="$sandbox/home"`、`CAC_DIR="$sandbox/.cac"`、`ENVS_DIR="$CAC_DIR/envs"`、`VERSIONS_DIR="$CAC_DIR/versions"`。
+- 在 `$CAC_DIR/real_claude` 写入 fake claude 路径；fake claude 只输出 redacted env summary，例如 key 是否存在，不输出值。
+- 构造 fake env：直接写入 `$ENVS_DIR/work/proxy`、`tz`、`lang`、`.claude/settings.json` 等文件，避免触发真实 setup/download/network。
+- provider routing 测试中的 secret 使用固定假值，例如 `test-secret-redacted`，并断言该字符串不会出现在 stdout/stderr。
+
+最低自动化测试场景：
 
 - 父 shell 存在 provider routing 变量，proxy 环境使用 managed mode。
+  - 预期：fake claude 看到 `ANTHROPIC_BASE_URL`、`ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN` 均不存在。
+  - 预期：stdout/stderr 只出现 key 名或 `present/hidden`，不出现假 secret 值。
 - 无 proxy 环境使用 warn mode，并报告可见 provider routing。
+  - 预期：fake claude 可见用户变量，`cac env check` 或 Signal guard 报 warning。
+  - 预期：该场景不失败启动，避免破坏 API key 用户 workflow。
 - settings 文件包含 provider routing key，check 报告路径和 key 名。
+  - 预期：扫描 `$ENVS_DIR/work/.claude/settings.json` 和 `$HOME/.claude/settings.json`。
+  - 预期：报告 `ANTHROPIC_BASE_URL` 等 key 名，但不报告 JSON value。
 - strict mode 会阻止不安全的本地配置。
+  - 预期：custom provider routing + `Asia/Shanghai` 或 `Asia/Urumqi` + 非 `preserve` policy 时拒绝启动 fake claude。
+  - 预期：错误信息包含修复命令，例如切换 policy、移除 key、改成 `preserve`。
 - wrapper 改动后 Node 与 Bun runtime timezone probe 都能通过；如果 CI 没有 Bun，应明确 skip 而不是把 Node 结果当成 Bun 结果。
+  - Node probe：用 `NODE_OPTIONS=--require <hook>` 验证 `Intl.DateTimeFormat().resolvedOptions().timeZone`、`Date#toString`、`getTimezoneOffset`。
+  - Bun probe：仅在 `command -v bun` 存在时用 `BUN_OPTIONS=--preload <hook>` 执行同等脚本；无 Bun 时输出 skip。
+  - 禁止用真实 `claude` 作为 Bun probe 替代，避免把请求发到真实账号环境。
+
+额外建议场景：
+
+- clone sanitize：构造临时 `$HOME/.claude/settings.json`，执行 clone 相关 helper 或隔离 fake create，确认 provider routing key 被移除或警告。
+- linked clone：`settings.override.json` 与 source settings 重新 merge 时，确认 scanner 能发现 source settings 中新增的 provider routing key。
+- redaction regression：对所有 diagnostics 输出做 `grep -F "test-secret-redacted"`，出现即失败。
+- wrapper inactive：PATH 中没有 `$CAC_DIR/bin/claude` 或 fake wrapper 未生效时，Signal guard 应报告 wrapper inactive，而不是误报 all good。
+- unknown runtime：既没有 Node hook 结果也没有 Bun hook 结果时，输出 `unknown/needs review`，不能输出绿色状态。
+
+手动测试清单，默认不执行：
+
+- 使用真实 Claude Code standalone binary 验证 `BUN_OPTIONS --preload` 是否实际生效。
+- 使用真实 proxy 验证 IP timezone 与环境 timezone 一致性。
+- 使用真实 `cac env create` 验证 setup/download/latest/version 流程。
+- 使用真实 `cac env check -d` 检查完整输出格式。
+
+手动测试执行前置条件：
+
+- 必须使用新建的临时 Windows 用户或明确隔离的 `HOME` / `USERPROFILE`。
+- 必须使用新建的临时 `CAC_DIR`，不能复用用户正在使用的 main `cac` 环境。
+- 必须使用测试专用 Claude 账号或无账号 fake binary；不能使用用户当前 OAuth session。
+- 必须提前记录清理命令，并确认不会删除真实 `~/.cac` 或 `~/.claude`。
 
 ## 实施顺序
 
