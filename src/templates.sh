@@ -247,8 +247,6 @@ _provider_routing_settings_scan() {
         "$env_dir/.claude/settings.json"
         "$env_dir/.claude/settings.local.json"
         "$env_dir/.claude/settings.override.json"
-        "$HOME/.claude/settings.json"
-        "$HOME/.claude/settings.local.json"
         "$HOME/.claude.json"
     )
     local existing=() file

@@ -160,6 +160,22 @@ assert_not_contains "$strict_out" "https://secret.invalid" "strict output redact
 rm -rf "$sandbox"
 
 reset_sandbox
+make_env strict_host_settings
+_write_wrapper
+mkdir -p "$HOME/.claude"
+echo "strict" > "$ENVS_DIR/strict_host_settings/signal_guard"
+echo '{"env":{"ANTHROPIC_API_KEY":"test-secret-redacted"}}' > "$HOME/.claude/settings.json"
+clear_provider_env
+set +e
+strict_host_out="$("$CAC_DIR/bin/claude" 2>&1)"
+strict_host_rc=$?
+set -e
+[[ "$strict_host_rc" -eq 0 ]] && pass "strict ignores host settings for isolated launch" || fail "strict incorrectly blocked isolated launch from host settings"
+assert_not_contains "$strict_host_out" "signal-guard strict blocked Claude startup" "strict does not report host settings as effective"
+assert_not_contains "$strict_host_out" "test-secret-redacted" "strict host settings output redacts secret values"
+rm -rf "$sandbox"
+
+reset_sandbox
 mkdir -p "$HOME/.claude" "$VERSIONS_DIR/2.1.196"
 echo '{"env":{"ANTHROPIC_BASE_URL":"test-secret-redacted"},"source":"value"}' > "$HOME/.claude/settings.json"
 touch "$VERSIONS_DIR/2.1.196/claude" "$VERSIONS_DIR/2.1.196/claude.exe"
