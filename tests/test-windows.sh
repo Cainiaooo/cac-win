@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ── Windows 冒烟测试 (test-windows.sh) ──────────────────
-# 在 Windows Git Bash (MINGW64) 环境下运行
-# Linux 环境下自动跳过 Windows 专项测试，标记 SKIP
+# Windows smoke tests
+# Run in Git Bash on Windows; skip on non-Windows platforms.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -343,20 +342,20 @@ _generate_client_cert() { return 0; }
 
 if ( _env_cmd_create copied --clone --no-link -c 2.1.97 ) >/dev/null 2>&1; then
     [[ -f "$ENVS_DIR/copied/clone_mode" ]] && [[ "$(_read "$ENVS_DIR/copied/clone_mode")" == "copied" ]] \
-        && pass "copy 模式写入 clone_mode=copied" \
-        || fail "copy 模式缺少 clone_mode=copied"
+        && pass "copy mode writes clone_mode=copied" \
+        || fail "copy mode missing clone_mode=copied"
     [[ ! -f "$ENVS_DIR/copied/clone_source" ]] \
-        && pass "copy 模式不写 clone_source" \
-        || fail "copy 模式仍写入 clone_source"
+        && pass "copy mode does not write clone_source" \
+        || fail "copy mode still wrote clone_source"
     [[ ! -f "$ENVS_DIR/copied/.claude/settings.override.json" ]] \
-        && pass "copy 模式不写 settings.override.json" \
-        || fail "copy 模式仍写入 settings.override.json"
+        && pass "copy mode does not write settings.override.json" \
+        || fail "copy mode still wrote settings.override.json"
     grep -q '"source": "value"' "$ENVS_DIR/copied/.claude/settings.json" \
-        && pass "copy 模式创建时完成一次性 settings merge" \
-        || fail "copy 模式未完成一次性 settings merge"
+        && pass "copy mode merges settings once at create" \
+        || fail "copy mode did not merge settings at create"
     [[ -f "$ENVS_DIR/copied/.claude/agents/test.md" ]] \
-        && pass "clone 包含 agents 目录" \
-        || fail "clone 未复制 agents 目录"
+        && pass "clone copies agents directory" \
+        || fail "clone did not copy agents directory"
 
     mkdir -p "$HOME/.claude/commands" "$HOME/.claude/hooks" "$HOME/.claude/skills" "$HOME/.claude/plugins"
     echo '# updated agent' > "$HOME/.claude/agents/test.md"
@@ -374,28 +373,61 @@ if ( _env_cmd_create copied --clone --no-link -c 2.1.97 ) >/dev/null 2>&1; then
             && [[ -f "$ENVS_DIR/copied/.claude/hooks/new.sh" ]] \
             && [[ -f "$ENVS_DIR/copied/.claude/skills/new.md" ]] \
             && [[ -f "$ENVS_DIR/copied/.claude/plugins/new.md" ]] \
-            && pass "sync 复制 commands/hooks/skills/plugins" \
-            || fail "sync 未复制 clone 资产目录"
+            && pass "sync copies commands/hooks/skills/plugins" \
+            || fail "sync did not copy cloned asset directories"
         grep -q '# updated agent' "$ENVS_DIR/copied/.claude/agents/test.md" \
-            && pass "sync 刷新已有 agents 内容" \
-            || fail "sync 未刷新 agents 内容"
+            && pass "sync refreshes existing agents content" \
+            || fail "sync did not refresh agents content"
         [[ ! -f "$ENVS_DIR/copied/.claude/skills/stale.md" ]] \
-            && pass "sync 刷新目标目录并移除旧文件" \
-            || fail "sync 未移除目标目录旧文件"
+            && pass "sync replaces stale target directories" \
+            || fail "sync left stale files in target directories"
         grep -q '# source claude md' "$ENVS_DIR/copied/.claude/CLAUDE.md" \
-            && pass "sync 复制 CLAUDE.md" \
-            || fail "sync 未复制 CLAUDE.md"
+            && pass "sync copies CLAUDE.md" \
+            || fail "sync did not copy CLAUDE.md"
         grep -q 'cac managed environment' "$ENVS_DIR/copied/.claude/CLAUDE.md" \
-            && pass "sync 保留 copied CLAUDE.md 的 cac 元提示" \
-            || fail "sync 覆盖了 copied CLAUDE.md 的 cac 元提示"
+            && pass "sync keeps copied CLAUDE.md cac metadata" \
+            || fail "sync overwrote copied CLAUDE.md cac metadata"
         ! grep -q 'must-not-sync' "$ENVS_DIR/copied/.claude/settings.json" \
-            && pass "sync 不同步 settings.json" \
-            || fail "sync 错误同步了 settings.json"
+            && pass "sync does not touch settings.json" \
+            || fail "sync incorrectly changed settings.json"
     else
-        fail "_env_cmd_sync copied 失败"
+        fail "_env_cmd_sync copied failed"
+    fi
+
+    if ! ( _env_cmd_sync copied copied ) >/dev/null 2>&1; then
+        [[ -f "$ENVS_DIR/copied/.claude/agents/test.md" ]] \
+            && pass "sync rejects self env source without deleting assets" \
+            || fail "self env sync removed copied assets"
+    else
+        fail "sync unexpectedly allowed self env source"
+    fi
+
+    if ! ( _env_cmd_sync copied "$ENVS_DIR/copied/.claude" ) >/dev/null 2>&1; then
+        [[ -f "$ENVS_DIR/copied/.claude/agents/test.md" ]] \
+            && pass "sync rejects self path source without deleting assets" \
+            || fail "self path sync removed copied assets"
+    else
+        fail "sync unexpectedly allowed self path source"
+    fi
+
+    if ( _env_cmd_create meta-source --clone --no-link -c 2.1.97 ) >/dev/null 2>&1; then
+        if ( _env_cmd_sync copied "$ENVS_DIR/meta-source/.claude" ) >/dev/null 2>&1; then
+            grep -q '# source claude md' "$ENVS_DIR/copied/.claude/CLAUDE.md" \
+                && pass "sync preserves source CLAUDE body when rebuilding copied target" \
+                || fail "sync lost source CLAUDE body for copied target"
+            grep -q 'Environment name: `copied`' "$ENVS_DIR/copied/.claude/CLAUDE.md" \
+                && ! grep -q 'Environment name: `meta-source`' "$ENVS_DIR/copied/.claude/CLAUDE.md" \
+                && [[ "$(grep -c '^# cac managed environment$' "$ENVS_DIR/copied/.claude/CLAUDE.md")" -eq 1 ]] \
+                && pass "sync rebuilds copied CLAUDE.md for target env" \
+                || fail "sync kept source env metadata in copied CLAUDE.md"
+        else
+            fail "_env_cmd_sync copied from meta-source path failed"
+        fi
+    else
+        fail "_env_cmd_create meta-source failed"
     fi
 else
-    fail "_env_cmd_create --clone --no-link 失败"
+    fail "_env_cmd_create --clone --no-link failed"
 fi
 
 _ln_log="$tmp_cac/linked-ln.log"
@@ -416,23 +448,38 @@ ln() {
 }
 if ( _env_cmd_create linked --clone -c 2.1.97 ) >/dev/null 2>&1; then
     grep -q '/agents' "$_ln_log" \
-        && pass "link 模式创建 agents symlink" \
-        || fail "link 模式未创建 agents symlink"
+        && pass "link mode creates agents symlink" \
+        || fail "link mode did not create agents symlink"
     echo '# linked agent update' > "$HOME/.claude/agents/test.md"
     : > "$_ln_log"
     if ( _env_cmd_sync linked ) >/dev/null 2>&1; then
         grep -q '/agents' "$_ln_log" \
             && grep -q 'CLAUDE.md' "$_ln_log" \
-            && pass "sync 保留 linked 资产 symlink" \
-            || fail "sync 将 linked 资产退化为普通复制"
+            && pass "sync keeps linked host assets as symlinks" \
+            || fail "sync converted linked host assets into copies"
         [[ "$(_read "$ENVS_DIR/linked/clone_mode")" == "linked" ]] \
-            && pass "sync 保留 clone_mode=linked" \
-            || fail "sync 修改了 linked clone_mode"
+            && pass "sync keeps clone_mode=linked" \
+            || fail "sync changed linked clone_mode"
     else
-        fail "_env_cmd_sync linked 失败"
+        fail "_env_cmd_sync linked failed"
+    fi
+
+    : > "$_ln_log"
+    if ( _env_cmd_sync linked meta-source ) >/dev/null 2>&1; then
+        grep -q '/agents' "$_ln_log" \
+            && ! grep -q 'CLAUDE.md' "$_ln_log" \
+            && pass "sync rebuilds linked CLAUDE.md instead of linking source env metadata" \
+            || fail "linked sync still linked CLAUDE.md from source env"
+        grep -q 'Environment name: `linked`' "$ENVS_DIR/linked/.claude/CLAUDE.md" \
+            && ! grep -q 'Environment name: `meta-source`' "$ENVS_DIR/linked/.claude/CLAUDE.md" \
+            && [[ "$(grep -c '^# cac managed environment$' "$ENVS_DIR/linked/.claude/CLAUDE.md")" -eq 1 ]] \
+            && pass "sync rebuilds linked CLAUDE.md for target env" \
+            || fail "sync kept source env metadata in linked CLAUDE.md"
+    else
+        fail "_env_cmd_sync linked meta-source failed"
     fi
 else
-    fail "_env_cmd_create --clone link 模式失败"
+    fail "_env_cmd_create --clone link mode failed"
 fi
 unset -f uname ln
 

@@ -2758,6 +2758,52 @@ _env_clone_source_dir() {
     echo "$src_claude_dir"
 }
 
+
+_env_resolve_dir() {
+    local dir="$1"
+    (
+        cd "$dir" 2>/dev/null && pwd -P
+    )
+}
+
+_env_sync_claude_md() {
+    local src_file="$1"
+    local config_dir="$2"
+    local env_name="$3"
+    local sync_mode="$4"
+    local target_file="$config_dir/CLAUDE.md"
+    local stripped_file=""
+
+    stripped_file=$(mktemp)
+    if awk '
+        BEGIN { managed=0 }
+        {
+            line=$0
+            sub(/\r$/, "", line)
+            if (line == "# cac managed environment") managed=1
+            if (!managed) print $0
+        }
+        END { exit managed ? 0 : 1 }
+    ' "$src_file" > "$stripped_file"; then
+        rm -f "$target_file"
+        if [[ -s "$stripped_file" ]]; then
+            cp "$stripped_file" "$target_file"
+            _write_env_claude_md "$config_dir" "$env_name" --append
+        else
+            _write_env_claude_md "$config_dir" "$env_name"
+        fi
+    else
+        rm -f "$target_file"
+        if [[ "$sync_mode" == "linked" ]]; then
+            ln -sf "$src_file" "$target_file"
+        else
+            cp -L "$src_file" "$target_file"
+            _write_env_claude_md "$config_dir" "$env_name" --append
+        fi
+    fi
+    rm -f "$stripped_file"
+}
+
 _env_cmd_create() {
     _require_setup
     local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true persona="" claude_auto_update=false
@@ -3133,6 +3179,11 @@ _env_cmd_sync() {
     src_claude_dir=$(_env_clone_source_dir "$source")
 
     mkdir -p "$env_dir/.claude"
+    local resolved_src_claude_dir="" resolved_env_claude_dir=""
+    resolved_src_claude_dir=$(_env_resolve_dir "$src_claude_dir")
+    resolved_env_claude_dir=$(_env_resolve_dir "$env_dir/.claude")
+    [[ "$resolved_src_claude_dir" != "$resolved_env_claude_dir" ]] \
+        || _die "sync source resolves to target environment '$name'"
 
     local sync_mode
     sync_mode=$(_read "$env_dir/clone_mode" "copied")
@@ -3159,13 +3210,7 @@ _env_cmd_sync() {
     done
 
     if [[ -f "$src_claude_dir/CLAUDE.md" || -L "$src_claude_dir/CLAUDE.md" ]]; then
-        rm -f "$env_dir/.claude/CLAUDE.md"
-        if [[ "$sync_mode" == "linked" ]]; then
-            ln -sf "$src_claude_dir/CLAUDE.md" "$env_dir/.claude/CLAUDE.md"
-        else
-            cp -L "$src_claude_dir/CLAUDE.md" "$env_dir/.claude/CLAUDE.md"
-            _write_env_claude_md "$env_dir/.claude" "$name" --append
-        fi
+        _env_sync_claude_md "$src_claude_dir/CLAUDE.md" "$env_dir/.claude" "$name" "$sync_mode"
         synced=$((synced + 1))
     else
         skipped=$((skipped + 1))

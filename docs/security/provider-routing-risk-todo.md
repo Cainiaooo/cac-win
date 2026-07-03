@@ -1,9 +1,65 @@
 # Provider Routing 风险优化 TODO
 
-> 状态：P0 已完成；P1 已完成版本审计，runtime debug/report 待办
+> 状态：P0 主路径已完成（wrapper-inactive 子场景待补）；P1 部分完成；P2 部分完成
 > 日期：2026-06-30
 > 范围：以 Windows 为重点的 `cac-win` 本地环境管理
-> 实施备注：截至 2026-07-03，本文 P0 与 `cac claude audit` 已实现；下方“当前实现/缺口”段落保留为实现前调研记录。
+> 实施备注：截至 2026-07-03，P0 的 provider-routing、settings scan、Signal guard、strict 主路径和 clone sanitize 已实现；`cac claude audit` 已实现轻量版本审计；`cac debug runtime` 与 `cac env report --redact` 仍待办。
+> 使用向变更说明：[provider-routing-signal-guard-changelog.md](provider-routing-signal-guard-changelog.md)
+
+## 当前进度（2026-07-03）
+
+核对基线：当前仓库已包含提交 `cb16864 fix(security): guard provider routing signals`。本节按当前源码、文档和测试核对；下方“调研验证结论”“实现前状态记录”中的“当前没有...”表述保留为实现前历史记录，不再代表最新状态。
+
+上游最新 Claude Code 已修复公开披露的对应问题，但 `cac-win` 仍保留本地防护和审计能力，用于防止未来版本、旧版本或自定义 provider 配置再次出现同类风险。
+
+### 已完成
+
+- P0-1 显式 provider routing 策略：已实现 `managed`、`warn`、`preserve`，proxy 环境默认 `managed`，非 proxy 环境默认 `warn`。
+- P0-2 settings scanner：已扫描受管 `.claude`、host `.claude`、`~/.claude.json` 中的 provider routing key，并按 `routing`、`credential`、`provider-mode`、`trace-propagation` 分类；输出只包含文件路径、key 名和类别，不输出值。
+- P0-3 `Signal guard` 区块：`cac env check` 与 `cac env check -d` 均有独立区块，问题会进入 summary；Node probe 和 Bun probe 已分开运行，Bun 不存在时明确 skip。
+- P0-4 启动 strict mode 主路径：已实现 `signal-guard warn|strict`；strict 会阻止可见 provider routing env、settings provider key、custom provider routing + `Asia/Shanghai` / `Asia/Urumqi` 等高风险组合，并给出修复命令；输出不包含 secret 值。
+- P0-5 clone 行为：clone 默认 sanitize provider routing key；支持 `--sanitize-provider-routing` 和 `--preserve-provider-routing`，输出只报告 key 名。
+- P1-8 文档：README、英文/中文 command docs 已补充 provider routing、signal guard、clone sanitize/preserve 和 `cac claude audit`。
+- P2-10 自动化测试主路径：新增 `tests/test-provider-routing.sh`，覆盖 managed/warn、settings scan、redaction、strict block、clone sanitize、Node/Bun runtime probe；`tests/test-claude-autoupdate.sh` 已覆盖 `cac claude audit`。
+
+### 部分完成
+
+- P1-7 Claude Code 版本审计：已实现 `cac claude audit [current|<version>]`；`2.1.91` 到 `2.1.196` 输出 `needs review`，其他版本输出 `unknown`，不会输出假安全状态。尚未实现二进制 marker string 扫描，当前是保守的版本范围审计。
+- P0-4 strict mode 的 “wrapper 未生效” 子场景：`cac env check` 仍会检测 wrapper/PATH 状态，但启动期 strict 逻辑运行在 wrapper 内，无法在 wrapper 完全绕过时自行阻止启动；该子场景仍依赖诊断检查。
+- P2-10 自动化测试扩展项：主风险路径已覆盖；建议清单中的 wrapper inactive、unknown runtime、linked clone 重新 merge 等边缘用例尚未单独补齐。
+
+### 未完成
+
+- P1-6 `cac debug runtime` 尚未实现。
+- P2-9 `cac env report --redact` 尚未实现。
+- P1-7 的真实二进制 marker string 扫描尚未实现。
+
+### 最近验证
+
+- 已安装 Bun `1.3.14`，`tests/test-provider-routing.sh` 在 Bun 可用时为 `21 passed, 0 failed, 0 skipped`。
+- `tests/test-claude-autoupdate.sh` 为 `25 passed, 0 failed`。
+- 先前完整回归包括 `tests/test-windows.sh`、`tests/test-cmd-entry.sh`、`node --check src/relay.js`、`node --check src/fingerprint-hook.js` 和 `git diff --check`。
+- 已在隔离临时 HOME 单独下载并 SHA256 校验 Claude Code `2.1.196` `win32-x64` 包，未执行真实 Claude Code；校验值为 `180d7b279455e8b89d4353a5146447be2f80b80fb0db14bdc6dd9cb98c0aef09`。
+
+## 后续计划与投入判断
+
+当前 P0 防护已经落地，且上游最新 Claude Code 已修复公开披露的对应问题。后续投入应优先用于可维护的诊断、脱敏报告和回归测试；不建议优先做维护成本高、容易误导用户的二进制 marker 扫描。
+
+| 后续项 | 必要性 | 预计投入 | 性价比 | 建议 |
+|---|---:|---:|---:|---|
+| `cac env report --redact` | 高 | 3-5 小时 | 高 | 优先做。可复用 `env check -d`、settings scanner、runtime probe 和版本审计结果，方便用户安全粘贴 issue。 |
+| 自动化测试扩展项 | 中高 | 2-4 小时 | 高 | 优先做。补 wrapper inactive、unknown runtime、linked clone 重新 merge，可防止这次安全边界回归。 |
+| `cac debug runtime` | 中 | 0.5-1.5 天 | 中 | 暂缓。与 `env check -d` / `env report --redact` 有重叠，等实际排障需求明确后再做。 |
+| Claude Code 二进制 marker string 扫描 | 低到中 | 1-3 天 | 偏低 | 暂不建议。marker 易变、易误判；当前 `needs review` / `unknown` 的保守版本审计更稳妥。 |
+| strict mode 的 wrapper-inactive 启动拦截 | 低 | 不确定 | 低 | 不建议作为启动期功能追。wrapper 完全未生效时，wrapper 内逻辑无法拦截；应通过 `env check` / report 暴露。 |
+| 真实 Claude/Bun standalone 手动验证流程 | 低到中 | 半天以上 | 偏低 | 仅作为发布前抽检。必须使用隔离 HOME/CAC_DIR 和测试账号或 fake binary，不能成为默认自动化测试。 |
+
+建议下一小轮只做两件事：
+
+1. 实现 `cac env report --redact`。
+2. 补齐 wrapper inactive、unknown runtime、linked clone 重新 merge 三类测试。
+
+这两项预计半天以内可完成，收益主要是排障和防回归；其他项目可以等真实需求或新风险出现后再排期。
 
 ## 调研验证结论
 
@@ -11,7 +67,7 @@
 
 外部信息核对时间：2026-07-01。以下背景来自公开报告、第三方逆向分析和 Anthropic/Claude Code 官方文档；第三方逆向结论需要在实现审计命令时按版本重新验证，不应直接当作长期稳定事实。
 
-已确认的当前实现：
+实现前已确认的当前实现（历史记录，2026-07-01）：
 
 - wrapper 在配置 proxy 时会导出 `HTTPS_PROXY`、`HTTP_PROXY`、`ALL_PROXY`，并设置 `NO_PROXY=localhost,127.0.0.1`。
 - wrapper 在 proxy 模式下会从子进程环境中移除 `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_API_KEY`；无 proxy 时保留这些用户环境变量。
@@ -21,7 +77,7 @@
 - `cac env check -d` 已包含 Node Intl 时区/语言 smoke test，并把 runtime 探针结果放在 Identity 详情中；但当前 smoke test 只验证 Node，不验证 Bun。
 - 每个环境有独立 `.claude` 目录，并通过 `CLAUDE_CONFIG_DIR` 注入；clone 模式会继承 host 或其他环境的配置资源。
 
-已确认的缺口：
+实现前已确认的缺口（历史记录，2026-07-01）：
 
 - 当前没有 `provider-routing` 环境配置项，也没有 `managed`、`warn`、`preserve` 的显式策略。
 - 当前没有 `signal-guard` 环境配置项，也没有启动期 strict 模式。
@@ -89,9 +145,9 @@ Bun runtime 相关背景：
 - 避免在日志或诊断信息中泄露 secret 值。
 - 明确说明本地环境管理与服务端 provider 决策之间的边界。
 
-## 当前状态
+## 实现前状态记录
 
-`cac-win` 已经具备以下基础能力：
+以下内容保留为实现前 baseline；最新状态以“当前进度（2026-07-03）”为准。`cac-win` 当时已经具备以下基础能力：
 
 - 配置 proxy 时，wrapper 会使用 proxy 相关环境变量。
 - proxy 模式下，wrapper 当前会移除 `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_API_KEY`。
@@ -112,6 +168,8 @@ Bun runtime 相关背景：
 ## P0 任务
 
 ### 1. 增加显式 provider routing 策略
+
+**状态：已完成。** 已实现 `provider-routing` 存储、默认值、`env create` 参数、`env set` 修改、wrapper 启动处理和 `env check` 报告。
 
 新增环境设置：
 
@@ -147,6 +205,8 @@ cac env set [name] provider-routing <managed|warn|preserve>
 - 没有该设置的既有环境能获得合理默认值。
 
 ### 2. 扫描受管 `.claude` 设置中的 provider routing key
+
+**状态：已完成。** Scanner 已覆盖列出的 settings 文件，递归查找 key，按风险类别输出，且不输出值。
 
 新增 scanner，供 `cac env check` 和启动 strict mode 使用。
 
@@ -189,6 +249,8 @@ CLAUDE_CODE_PROPAGATE_TRACEPARENT
 
 ### 3. 在 `cac env check` 增加 `Signal guard` 区块
 
+**状态：已完成。** 普通与详细 check 均输出独立区块；Node 与 Bun probe 分开执行，Bun 不存在时显示 skip。
+
 新增独立输出块，不要混在 telemetry 或 identity 检查里：
 
 ```text
@@ -209,6 +271,8 @@ Signal guard
 - 如果检测到 Bun 可用或 Claude Code 当前版本是 Bun standalone binary，必须运行 Bun probe；不能只用 Node probe 代替。
 
 ### 4. 增加启动 strict mode
+
+**状态：部分完成。** 已阻止可见 provider routing env、settings key、高风险 timezone 组合；wrapper 完全未生效时无法由 wrapper 内 strict 自行拦截，仍依赖 `cac env check` 的 wrapper/PATH 诊断。
 
 新增环境设置：
 
@@ -238,6 +302,8 @@ strict mode 应在以下情况下阻止启动：
 
 ### 5. 更新 clone 行为
 
+**状态：已完成。** clone 默认 sanitize，支持显式 sanitize/preserve，输出 key 名且不输出值。
+
 从 host `.claude` clone 配置时，provider routing key 不应静默进入受管环境。
 
 建议选项：
@@ -258,6 +324,8 @@ cac env create work --clone --preserve-provider-routing
 ## P1 任务
 
 ### 6. 增加运行时检查命令
+
+**状态：未完成。** 尚未实现 `cac debug runtime`。
 
 新增：
 
@@ -289,6 +357,8 @@ locale: <locale>
 
 ### 7. 增加 Claude Code 版本审计提示
 
+**状态：部分完成。** 已实现 `cac claude audit [current|<version>]` 和保守版本范围判断；尚未扫描真实二进制 marker string。
+
 新增轻量命令：
 
 ```bash
@@ -311,6 +381,8 @@ cac claude audit <current|version>
 
 ### 8. 改进文档
 
+**状态：已完成。** README 与中英文 command docs 已补充本地管理边界、`env check -d`、provider routing/signal guard 和 clone 行为。
+
 在 README 中增加类似章节：
 
 ```text
@@ -328,6 +400,8 @@ Provider routing and signal guard
 ## P2 任务
 
 ### 9. 增加脱敏环境报告
+
+**状态：未完成。** 尚未实现 `cac env report --redact`。
 
 新增：
 
@@ -351,6 +425,8 @@ runtime probe result
 ```
 
 ### 10. 增加自动化测试
+
+**状态：部分完成。** 主风险路径已有离线测试覆盖；wrapper inactive、unknown runtime、linked clone 重新 merge 等扩展场景尚未补齐。
 
 安全测试原则：
 
