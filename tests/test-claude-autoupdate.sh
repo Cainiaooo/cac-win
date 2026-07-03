@@ -22,6 +22,10 @@ assert_no_file() {
     local path="$1" label="$2"
     [[ ! -e "$path" ]] && pass "$label" || fail "$label"
 }
+assert_contains() {
+    local actual="$1" expected="$2" label="$3"
+    [[ "$actual" == *"$expected"* ]] && pass "$label" || fail "$label (missing '$expected')"
+}
 
 echo "════════════════════════════════════════════════════════"
 echo "  Claude auto-update smoke test"
@@ -153,6 +157,17 @@ assert_no_file "$VERSIONS_DIR/9.1.0" "prune --yes removes all unused versions"
 assert_file "$VERSIONS_DIR/1.0.0" "prune --yes keeps used version"
 assert_file "$VERSIONS_DIR/2.1.0" "prune --yes keeps second used version"
 
+_make_version 2.1.196
+printf '2.1.196\n' > "$ENVS_DIR/alpha/version"
+printf 'alpha\n' > "$CAC_DIR/current"
+audit_out="$(_claude_cmd_audit current 2>&1)"
+assert_contains "$audit_out" "environment:" "audit current reports active environment"
+assert_contains "$audit_out" "2.1.196" "audit current reports pinned version"
+assert_contains "$audit_out" "needs review" "audit marks reported affected version range for review"
+
+audit_out="$(_claude_cmd_audit 2.1.197 2>&1)"
+assert_contains "$audit_out" "unknown" "audit leaves newer unverified versions unknown"
+assert_contains "$audit_out" "do not treat this as known safe" "audit avoids false safe status"
 echo
 echo "════════════════════════════════════════════════════════"
 echo "  Result: $PASS passed, $FAIL failed"

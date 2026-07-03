@@ -184,6 +184,112 @@ _node_require_path() {
     esac
 }
 
+_provider_routing_keys() {
+    cat <<'EOF'
+ANTHROPIC_BASE_URL
+ANTHROPIC_API_KEY
+ANTHROPIC_AUTH_TOKEN
+ANTHROPIC_AWS_BASE_URL
+ANTHROPIC_AWS_API_KEY
+ANTHROPIC_BEDROCK_BASE_URL
+ANTHROPIC_BEDROCK_MANTLE_BASE_URL
+ANTHROPIC_FOUNDRY_BASE_URL
+ANTHROPIC_VERTEX_BASE_URL
+CLAUDE_CODE_USE_BEDROCK
+CLAUDE_CODE_USE_VERTEX
+CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
+CLAUDE_CODE_PROPAGATE_TRACEPARENT
+EOF
+}
+
+_provider_routing_policy() {
+    local env_dir="$1" proxy="$2" policy=""
+    [[ -f "$env_dir/provider_routing" ]] && policy=$(tr -d '[:space:]' < "$env_dir/provider_routing" 2>/dev/null || true)
+    if [[ -z "$policy" ]]; then
+        if [[ -n "$proxy" ]]; then policy="managed"; else policy="warn"; fi
+    fi
+    case "$policy" in
+        managed|warn|preserve) printf '%s' "$policy" ;;
+        *) if [[ -n "$proxy" ]]; then printf 'managed'; else printf 'warn'; fi ;;
+    esac
+}
+
+_signal_guard_policy() {
+    local env_dir="$1" policy=""
+    [[ -f "$env_dir/signal_guard" ]] && policy=$(tr -d '[:space:]' < "$env_dir/signal_guard" 2>/dev/null || true)
+    case "$policy" in
+        warn|strict) printf '%s' "$policy" ;;
+        *) printf 'warn' ;;
+    esac
+}
+
+_provider_routing_env_keys_present() {
+    local key val found=()
+    while IFS= read -r key; do
+        [[ -n "$key" ]] || continue
+        val="${!key-}"
+        [[ -n "$val" ]] && found+=("$key")
+    done < <(_provider_routing_keys)
+    ((${#found[@]} == 0)) && return 0
+    printf '%s\n' "${found[@]}"
+}
+
+_provider_routing_unset_env() {
+    local key
+    while IFS= read -r key; do
+        [[ -n "$key" ]] && unset "$key"
+    done < <(_provider_routing_keys)
+}
+
+_provider_routing_settings_scan() {
+    local env_dir="$1"
+    local files=(
+        "$env_dir/.claude/settings.json"
+        "$env_dir/.claude/settings.local.json"
+        "$env_dir/.claude/settings.override.json"
+        "$HOME/.claude/settings.json"
+        "$HOME/.claude/settings.local.json"
+        "$HOME/.claude.json"
+    )
+    local existing=() file
+    for file in "${files[@]}"; do
+        [[ -f "$file" ]] && existing+=("$file")
+    done
+    ((${#existing[@]} == 0)) && return 0
+    node -e '
+const fs = require("fs");
+const keys = new Set([
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_AWS_BASE_URL",
+  "ANTHROPIC_AWS_API_KEY",
+  "ANTHROPIC_BEDROCK_BASE_URL",
+  "ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
+  "ANTHROPIC_FOUNDRY_BASE_URL",
+  "ANTHROPIC_VERTEX_BASE_URL",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+  "CLAUDE_CODE_PROPAGATE_TRACEPARENT",
+]);
+function visit(value, file, seen) {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) { value.forEach(function(item) { visit(item, file, seen); }); return; }
+  Object.keys(value).forEach(function(key) {
+    if (keys.has(key)) {
+      const id = file + "\t" + key;
+      if (!seen.has(id)) { seen.add(id); process.stdout.write(file + "\t" + key + "\n"); }
+    }
+    visit(value[key], file, seen);
+  });
+}
+process.argv.slice(1).forEach(function(file) {
+  try { visit(JSON.parse(fs.readFileSync(file, "utf8")), file, new Set()); } catch (_) {}
+});
+' "${existing[@]}" 2>/dev/null || true
+}
+
 _tcp_check() {
     local host="$1" port="$2" timeout_sec="${3:-2}"
     if (echo >"/dev/tcp/$host/$port") 2>/dev/null; then
@@ -401,11 +507,15 @@ if [[ -d "$_env_dir/.claude" ]]; then
                [[ "$_env_dir/.claude/settings.override.json" -nt "$_env_dir/.claude/settings.json" ]]; then
                 node -e "
 const fs=require('fs');
-const b=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));
+const keys=new Set(['ANTHROPIC_BASE_URL','ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','ANTHROPIC_AWS_BASE_URL','ANTHROPIC_AWS_API_KEY','ANTHROPIC_BEDROCK_BASE_URL','ANTHROPIC_BEDROCK_MANTLE_BASE_URL','ANTHROPIC_FOUNDRY_BASE_URL','ANTHROPIC_VERTEX_BASE_URL','CLAUDE_CODE_USE_BEDROCK','CLAUDE_CODE_USE_VERTEX','CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST','CLAUDE_CODE_PROPAGATE_TRACEPARENT']);
+function sanitize(v){if(!v||typeof v!=='object')return v;if(Array.isArray(v))return v.map(sanitize);const r={};for(const[k,val]of Object.entries(v)){if(!keys.has(k))r[k]=sanitize(val)}return r}
+let b=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));
 const o=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+const mode=process.argv[4]||'sanitize';
+if(mode!=='preserve')b=sanitize(b);
 function m(b,o){const r={...b};for(const[k,v]of Object.entries(o)){if(k in r&&typeof r[k]==='object'&&r[k]!==null&&typeof v==='object'&&v!==null&&!Array.isArray(r[k])&&!Array.isArray(v)){r[k]=m(r[k],v)}else{r[k]=v}}return r}
 fs.writeFileSync(process.argv[3],JSON.stringify(m(b,o),null,2));
-" "$_src_settings" "$_env_dir/.claude/settings.override.json" "$_env_dir/.claude/settings.json" 2>/dev/null || true
+" "$_src_settings" "$_env_dir/.claude/settings.override.json" "$_env_dir/.claude/settings.json" "$([[ -f "$_env_dir/clone_provider_routing" ]] && tr -d '[:space:]' < "$_env_dir/clone_provider_routing" || echo sanitize)" 2>/dev/null || true
             fi
         fi
     fi
@@ -496,12 +606,13 @@ fi
 # ── billing header suppression (x-anthropic-billing-header) ──
 export CLAUDE_CODE_ATTRIBUTION_HEADER=0
 
-# with proxy: force OAuth (clear API config to prevent leaks)
-# without proxy: preserve user's API Key / Base URL
-if [[ -n "$PROXY" ]]; then
-    unset ANTHROPIC_BASE_URL
-    unset ANTHROPIC_AUTH_TOKEN
-    unset ANTHROPIC_API_KEY
+# Provider routing policy:
+# - managed: hide custom provider routing and credential env from Claude.
+# - warn/preserve: keep user env visible, but signal-guard can report or block it.
+_provider_routing_policy=$(_provider_routing_policy "$_env_dir" "$PROXY")
+_signal_guard_policy=$(_signal_guard_policy "$_env_dir")
+if [[ "$_provider_routing_policy" == "managed" ]]; then
+    _provider_routing_unset_env
 fi
 
 # ── git identity spoofing ──
@@ -601,6 +712,49 @@ if [[ -f "$_env_dir/lang" ]]; then
     export CAC_LANG="$LANG"
     export LANGUAGE="${LANG%%.*}"
 fi
+
+_provider_env_keys="$(_provider_routing_env_keys_present | paste -sd, - 2>/dev/null || true)"
+_provider_settings_scan="$(_provider_routing_settings_scan "$_env_dir" 2>/dev/null || true)"
+_provider_settings_keys="$(printf '%s\n' "$_provider_settings_scan" | awk -F '\t' 'NF>=2 {print $2}' | sort -u | paste -sd, - 2>/dev/null || true)"
+_provider_signal_visible=false
+[[ -n "$_provider_env_keys" || -n "$_provider_settings_keys" ]] && _provider_signal_visible=true
+_provider_china_tz=false
+case "${TZ:-}" in
+    Asia/Shanghai|Asia/Urumqi) _provider_china_tz=true ;;
+esac
+
+if [[ "$_signal_guard_policy" == "strict" ]]; then
+    _signal_guard_failures=()
+    if [[ -n "$_provider_env_keys" && "$_provider_routing_policy" != "preserve" ]]; then
+        _signal_guard_failures+=("provider routing env visible: $_provider_env_keys")
+    fi
+    if [[ -n "$_provider_settings_keys" ]]; then
+        _signal_guard_failures+=("provider routing key in Claude settings: $_provider_settings_keys")
+    fi
+    if [[ "$_provider_china_tz" == "true" && "$_provider_signal_visible" == "true" && "$_provider_routing_policy" != "preserve" ]]; then
+        _signal_guard_failures+=("custom provider routing with ${TZ:-unknown} timezone requires review")
+    fi
+    if ((${#_signal_guard_failures[@]} > 0)); then
+        echo "[cac] error: signal-guard strict blocked Claude startup" >&2
+        for _sg_issue in "${_signal_guard_failures[@]}"; do
+            echo "[cac] issue: $_sg_issue" >&2
+        done
+        echo "[cac] fix: run 'cac env set $_name provider-routing managed' to hide provider routing env vars." >&2
+        echo "[cac] fix: remove provider routing keys from Claude settings, or run 'cac env set $_name signal-guard warn' after review." >&2
+        exit 1
+    fi
+elif [[ "$_signal_guard_policy" == "warn" ]]; then
+    if [[ -n "$_provider_env_keys" ]]; then
+        echo "[cac] warning: provider routing env visible: $_provider_env_keys (values redacted)" >&2
+    fi
+    if [[ -n "$_provider_settings_keys" ]]; then
+        echo "[cac] warning: provider routing key in Claude settings: $_provider_settings_keys (values redacted)" >&2
+    fi
+    if [[ "$_provider_china_tz" == "true" && "$_provider_signal_visible" == "true" && "$_provider_routing_policy" != "preserve" ]]; then
+        echo "[cac] warning: custom provider routing with ${TZ:-unknown} timezone should be reviewed" >&2
+    fi
+fi
+
 if [[ -f "$_env_dir/hostname" ]]; then
     _hn=$(tr -d '[:space:]' < "$_env_dir/hostname")
     export HOSTNAME="$_hn" CAC_HOSTNAME="$_hn"

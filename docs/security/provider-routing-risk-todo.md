@@ -1,8 +1,9 @@
 # Provider Routing 风险优化 TODO
 
-> 状态：TODO
+> 状态：P0 已完成；P1 已完成版本审计，runtime debug/report 待办
 > 日期：2026-06-30
 > 范围：以 Windows 为重点的 `cac-win` 本地环境管理
+> 实施备注：截至 2026-07-03，本文 P0 与 `cac claude audit` 已实现；下方“当前实现/缺口”段落保留为实现前调研记录。
 
 ## 调研验证结论
 

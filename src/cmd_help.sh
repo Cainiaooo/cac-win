@@ -7,7 +7,9 @@ cmd_help() {
 
     echo "  $(_bold "Environment")"
     echo "    $(_green "cac env create") <name> [-p proxy] [-c ver] [--clone [source]] [--no-link] [--autoupdate]"
+    echo "                                      [--provider-routing mode] [--signal-guard mode]"
     echo "    $(_green "cac env set") [name] <key> <value>   Modify environment"
+    echo "                                      provider-routing, signal-guard, proxy, version, telemetry"
     echo "    $(_green "cac env sync") [name] [source]       Copy cloned assets, not settings"
     echo "    $(_green "cac env ls")                  List all environments"
     echo "    $(_green "cac env rm") <name>           Remove an environment"

@@ -56,6 +56,242 @@ _native_path() {
     esac
 }
 
+# Path form for NODE_OPTIONS / BUN_OPTIONS only.
+_node_require_path() {
+    local path="$1"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            cygpath -m "$path" 2>/dev/null || printf '%s' "$path"
+            ;;
+        *)
+            printf '%s' "$path"
+            ;;
+    esac
+}
+
+_provider_routing_keys() {
+    cat <<'EOF'
+ANTHROPIC_BASE_URL
+ANTHROPIC_API_KEY
+ANTHROPIC_AUTH_TOKEN
+ANTHROPIC_AWS_BASE_URL
+ANTHROPIC_AWS_API_KEY
+ANTHROPIC_BEDROCK_BASE_URL
+ANTHROPIC_BEDROCK_MANTLE_BASE_URL
+ANTHROPIC_FOUNDRY_BASE_URL
+ANTHROPIC_VERTEX_BASE_URL
+CLAUDE_CODE_USE_BEDROCK
+CLAUDE_CODE_USE_VERTEX
+CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
+CLAUDE_CODE_PROPAGATE_TRACEPARENT
+EOF
+}
+
+_provider_routing_key_category() {
+    case "$1" in
+        ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_AWS_API_KEY)
+            echo "credential"
+            ;;
+        CLAUDE_CODE_USE_BEDROCK|CLAUDE_CODE_USE_VERTEX|CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST)
+            echo "provider-mode"
+            ;;
+        CLAUDE_CODE_PROPAGATE_TRACEPARENT)
+            echo "trace-propagation"
+            ;;
+        *)
+            echo "routing"
+            ;;
+    esac
+}
+
+_provider_routing_policy() {
+    local env_dir="$1" proxy="${2:-}" policy=""
+    policy=$(_read "$env_dir/provider_routing" "")
+    if [[ -z "$policy" ]]; then
+        if [[ -n "$proxy" ]]; then
+            policy="managed"
+        else
+            policy="warn"
+        fi
+    fi
+    case "$policy" in
+        managed|warn|preserve) echo "$policy" ;;
+        *) echo "$([[ -n "$proxy" ]] && echo managed || echo warn)" ;;
+    esac
+}
+
+_signal_guard_policy() {
+    local env_dir="$1" policy=""
+    policy=$(_read "$env_dir/signal_guard" "warn")
+    case "$policy" in
+        warn|strict) echo "$policy" ;;
+        *) echo "warn" ;;
+    esac
+}
+
+_provider_routing_env_keys_present() {
+    local key val found=()
+    while IFS= read -r key; do
+        [[ -n "$key" ]] || continue
+        val="${!key-}"
+        [[ -n "$val" ]] && found+=("$key")
+    done < <(_provider_routing_keys)
+    ((${#found[@]} == 0)) && return 0
+    printf '%s\n' "${found[@]}"
+}
+
+_provider_routing_settings_files() {
+    local env_dir="$1"
+    local files=(
+        "$env_dir/.claude/settings.json"
+        "$env_dir/.claude/settings.local.json"
+        "$env_dir/.claude/settings.override.json"
+        "$HOME/.claude/settings.json"
+        "$HOME/.claude/settings.local.json"
+        "$HOME/.claude.json"
+    )
+    local file
+    for file in "${files[@]}"; do
+        [[ -f "$file" ]] && printf '%s\n' "$file"
+    done
+}
+
+_provider_routing_settings_scan_paths() {
+    (($# == 0)) && return 0
+    node -e '
+const fs = require("fs");
+const keys = new Set([
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_AWS_BASE_URL",
+  "ANTHROPIC_AWS_API_KEY",
+  "ANTHROPIC_BEDROCK_BASE_URL",
+  "ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
+  "ANTHROPIC_FOUNDRY_BASE_URL",
+  "ANTHROPIC_VERTEX_BASE_URL",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+  "CLAUDE_CODE_PROPAGATE_TRACEPARENT",
+]);
+function category(key) {
+  if (key === "ANTHROPIC_API_KEY" || key === "ANTHROPIC_AUTH_TOKEN" || key === "ANTHROPIC_AWS_API_KEY") return "credential";
+  if (key === "CLAUDE_CODE_USE_BEDROCK" || key === "CLAUDE_CODE_USE_VERTEX" || key === "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST") return "provider-mode";
+  if (key === "CLAUDE_CODE_PROPAGATE_TRACEPARENT") return "trace-propagation";
+  return "routing";
+}
+function visit(value, file, seen) {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    value.forEach(function(item) { visit(item, file, seen); });
+    return;
+  }
+  Object.keys(value).forEach(function(key) {
+    if (keys.has(key)) {
+      const id = file + "\t" + key;
+      if (!seen.has(id)) {
+        seen.add(id);
+        process.stdout.write(file + "\t" + key + "\t" + category(key) + "\n");
+      }
+    }
+    visit(value[key], file, seen);
+  });
+}
+process.argv.slice(1).forEach(function(file) {
+  try {
+    const data = JSON.parse(fs.readFileSync(file, "utf8"));
+    visit(data, file, new Set());
+  } catch (_) {}
+});
+' "$@" 2>/dev/null || true
+}
+
+_provider_routing_settings_scan() {
+    local env_dir="$1" file
+    local files=()
+    while IFS= read -r file; do
+        [[ -n "$file" ]] && files+=("$file")
+    done < <(_provider_routing_settings_files "$env_dir")
+    ((${#files[@]} == 0)) && return 0
+    _provider_routing_settings_scan_paths "${files[@]}"
+}
+
+_provider_routing_sanitize_settings_file() {
+    local input="$1" output="$2"
+    node -e '
+const fs = require("fs");
+const keys = new Set([
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_AWS_BASE_URL",
+  "ANTHROPIC_AWS_API_KEY",
+  "ANTHROPIC_BEDROCK_BASE_URL",
+  "ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
+  "ANTHROPIC_FOUNDRY_BASE_URL",
+  "ANTHROPIC_VERTEX_BASE_URL",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+  "CLAUDE_CODE_PROPAGATE_TRACEPARENT",
+]);
+function sanitize(value) {
+  if (!value || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(sanitize);
+  const result = {};
+  Object.keys(value).forEach(function(key) {
+    if (!keys.has(key)) result[key] = sanitize(value[key]);
+  });
+  return result;
+}
+const input = process.argv[1];
+const output = process.argv[2];
+const data = JSON.parse(fs.readFileSync(input, "utf8"));
+fs.writeFileSync(output, JSON.stringify(sanitize(data), null, 2) + "\n");
+' "$input" "$output"
+}
+
+_runtime_intl_probe() {
+    local runtime="$1" hook_path="$2" expected_tz="$3" expected_lang="$4"
+    [[ -r "$hook_path" ]] || { echo "missing hook"; return 1; }
+
+    local hook_option; hook_option=$(_node_require_path "$hook_path")
+    local probe_js='
+function norm(v){v=String(v||"").trim();if(!v)return "";v=v.split(/[,:;]/)[0].trim().replace(/\.UTF-?8$/i,"").replace(/_/g,"-");const p=v.split("-").filter(Boolean);if(!p.length)return "";p[0]=p[0].toLowerCase();if(p[1]&&p[1].length===2)p[1]=p[1].toUpperCase();return p.join("-");}
+function localeOk(actual, expected){return !expected || actual===expected || (actual||"").startsWith(expected + "-u-");}
+function gmt(minutes){const sign=minutes<=0?"+":"-";const abs=Math.abs(minutes);return "GMT"+sign+String(Math.floor(abs/60)).padStart(2,"0")+String(abs%60).padStart(2,"0");}
+const tz=process.env.CAC_TZ||"";
+const locale=norm(process.env.CAC_LANG||"");
+const d=new Date("2026-01-01T12:00:00Z");
+const opts={hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false};
+const ro=Intl.DateTimeFormat().resolvedOptions();
+const emptyRo=Intl.DateTimeFormat([]).resolvedOptions();
+const actual=d.toLocaleTimeString(undefined,opts);
+const emptyActual=d.toLocaleTimeString([],opts);
+const expected=new Intl.DateTimeFormat(ro.locale||locale||undefined,Object.assign({},opts,{timeZone:tz||undefined})).format(d);
+const ok=(!tz||ro.timeZone===tz)&&(!tz||emptyRo.timeZone===tz)&&localeOk(ro.locale||"",locale)&&localeOk(emptyRo.locale||"",locale)&&(!tz||actual===expected)&&(!tz||emptyActual===expected)&&(!tz||d.toString().includes(gmt(d.getTimezoneOffset())));
+process.stdout.write(ok ? "ok" : JSON.stringify({timeZone:ro.timeZone||"",locale:ro.locale||"",emptyTimeZone:emptyRo.timeZone||"",emptyLocale:emptyRo.locale||"",actual,emptyActual,expected,stringValue:d.toString()}));
+'
+
+    case "$runtime" in
+        node)
+            command -v node >/dev/null 2>&1 || { echo "skip"; return 0; }
+            NODE_OPTIONS="--require $hook_option" CAC_TZ="$expected_tz" CAC_LANG="$expected_lang" \
+                node -e "$probe_js" 2>/dev/null || true
+            ;;
+        bun)
+            command -v bun >/dev/null 2>&1 || { echo "skip"; return 0; }
+            BUN_OPTIONS="--preload $hook_option" CAC_TZ="$expected_tz" CAC_LANG="$expected_lang" \
+                bun -e "$probe_js" 2>/dev/null || true
+            ;;
+        *)
+            echo "unknown runtime"
+            return 1
+            ;;
+    esac
+}
+
 _gen_uuid() {
     if command -v uuidgen &>/dev/null; then
         uuidgen

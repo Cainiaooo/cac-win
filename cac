@@ -66,6 +66,242 @@ _native_path() {
     esac
 }
 
+# Path form for NODE_OPTIONS / BUN_OPTIONS only.
+_node_require_path() {
+    local path="$1"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            cygpath -m "$path" 2>/dev/null || printf '%s' "$path"
+            ;;
+        *)
+            printf '%s' "$path"
+            ;;
+    esac
+}
+
+_provider_routing_keys() {
+    cat <<'EOF'
+ANTHROPIC_BASE_URL
+ANTHROPIC_API_KEY
+ANTHROPIC_AUTH_TOKEN
+ANTHROPIC_AWS_BASE_URL
+ANTHROPIC_AWS_API_KEY
+ANTHROPIC_BEDROCK_BASE_URL
+ANTHROPIC_BEDROCK_MANTLE_BASE_URL
+ANTHROPIC_FOUNDRY_BASE_URL
+ANTHROPIC_VERTEX_BASE_URL
+CLAUDE_CODE_USE_BEDROCK
+CLAUDE_CODE_USE_VERTEX
+CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
+CLAUDE_CODE_PROPAGATE_TRACEPARENT
+EOF
+}
+
+_provider_routing_key_category() {
+    case "$1" in
+        ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_AWS_API_KEY)
+            echo "credential"
+            ;;
+        CLAUDE_CODE_USE_BEDROCK|CLAUDE_CODE_USE_VERTEX|CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST)
+            echo "provider-mode"
+            ;;
+        CLAUDE_CODE_PROPAGATE_TRACEPARENT)
+            echo "trace-propagation"
+            ;;
+        *)
+            echo "routing"
+            ;;
+    esac
+}
+
+_provider_routing_policy() {
+    local env_dir="$1" proxy="${2:-}" policy=""
+    policy=$(_read "$env_dir/provider_routing" "")
+    if [[ -z "$policy" ]]; then
+        if [[ -n "$proxy" ]]; then
+            policy="managed"
+        else
+            policy="warn"
+        fi
+    fi
+    case "$policy" in
+        managed|warn|preserve) echo "$policy" ;;
+        *) echo "$([[ -n "$proxy" ]] && echo managed || echo warn)" ;;
+    esac
+}
+
+_signal_guard_policy() {
+    local env_dir="$1" policy=""
+    policy=$(_read "$env_dir/signal_guard" "warn")
+    case "$policy" in
+        warn|strict) echo "$policy" ;;
+        *) echo "warn" ;;
+    esac
+}
+
+_provider_routing_env_keys_present() {
+    local key val found=()
+    while IFS= read -r key; do
+        [[ -n "$key" ]] || continue
+        val="${!key-}"
+        [[ -n "$val" ]] && found+=("$key")
+    done < <(_provider_routing_keys)
+    ((${#found[@]} == 0)) && return 0
+    printf '%s\n' "${found[@]}"
+}
+
+_provider_routing_settings_files() {
+    local env_dir="$1"
+    local files=(
+        "$env_dir/.claude/settings.json"
+        "$env_dir/.claude/settings.local.json"
+        "$env_dir/.claude/settings.override.json"
+        "$HOME/.claude/settings.json"
+        "$HOME/.claude/settings.local.json"
+        "$HOME/.claude.json"
+    )
+    local file
+    for file in "${files[@]}"; do
+        [[ -f "$file" ]] && printf '%s\n' "$file"
+    done
+}
+
+_provider_routing_settings_scan_paths() {
+    (($# == 0)) && return 0
+    node -e '
+const fs = require("fs");
+const keys = new Set([
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_AWS_BASE_URL",
+  "ANTHROPIC_AWS_API_KEY",
+  "ANTHROPIC_BEDROCK_BASE_URL",
+  "ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
+  "ANTHROPIC_FOUNDRY_BASE_URL",
+  "ANTHROPIC_VERTEX_BASE_URL",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+  "CLAUDE_CODE_PROPAGATE_TRACEPARENT",
+]);
+function category(key) {
+  if (key === "ANTHROPIC_API_KEY" || key === "ANTHROPIC_AUTH_TOKEN" || key === "ANTHROPIC_AWS_API_KEY") return "credential";
+  if (key === "CLAUDE_CODE_USE_BEDROCK" || key === "CLAUDE_CODE_USE_VERTEX" || key === "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST") return "provider-mode";
+  if (key === "CLAUDE_CODE_PROPAGATE_TRACEPARENT") return "trace-propagation";
+  return "routing";
+}
+function visit(value, file, seen) {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    value.forEach(function(item) { visit(item, file, seen); });
+    return;
+  }
+  Object.keys(value).forEach(function(key) {
+    if (keys.has(key)) {
+      const id = file + "\t" + key;
+      if (!seen.has(id)) {
+        seen.add(id);
+        process.stdout.write(file + "\t" + key + "\t" + category(key) + "\n");
+      }
+    }
+    visit(value[key], file, seen);
+  });
+}
+process.argv.slice(1).forEach(function(file) {
+  try {
+    const data = JSON.parse(fs.readFileSync(file, "utf8"));
+    visit(data, file, new Set());
+  } catch (_) {}
+});
+' "$@" 2>/dev/null || true
+}
+
+_provider_routing_settings_scan() {
+    local env_dir="$1" file
+    local files=()
+    while IFS= read -r file; do
+        [[ -n "$file" ]] && files+=("$file")
+    done < <(_provider_routing_settings_files "$env_dir")
+    ((${#files[@]} == 0)) && return 0
+    _provider_routing_settings_scan_paths "${files[@]}"
+}
+
+_provider_routing_sanitize_settings_file() {
+    local input="$1" output="$2"
+    node -e '
+const fs = require("fs");
+const keys = new Set([
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_AWS_BASE_URL",
+  "ANTHROPIC_AWS_API_KEY",
+  "ANTHROPIC_BEDROCK_BASE_URL",
+  "ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
+  "ANTHROPIC_FOUNDRY_BASE_URL",
+  "ANTHROPIC_VERTEX_BASE_URL",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+  "CLAUDE_CODE_PROPAGATE_TRACEPARENT",
+]);
+function sanitize(value) {
+  if (!value || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(sanitize);
+  const result = {};
+  Object.keys(value).forEach(function(key) {
+    if (!keys.has(key)) result[key] = sanitize(value[key]);
+  });
+  return result;
+}
+const input = process.argv[1];
+const output = process.argv[2];
+const data = JSON.parse(fs.readFileSync(input, "utf8"));
+fs.writeFileSync(output, JSON.stringify(sanitize(data), null, 2) + "\n");
+' "$input" "$output"
+}
+
+_runtime_intl_probe() {
+    local runtime="$1" hook_path="$2" expected_tz="$3" expected_lang="$4"
+    [[ -r "$hook_path" ]] || { echo "missing hook"; return 1; }
+
+    local hook_option; hook_option=$(_node_require_path "$hook_path")
+    local probe_js='
+function norm(v){v=String(v||"").trim();if(!v)return "";v=v.split(/[,:;]/)[0].trim().replace(/\.UTF-?8$/i,"").replace(/_/g,"-");const p=v.split("-").filter(Boolean);if(!p.length)return "";p[0]=p[0].toLowerCase();if(p[1]&&p[1].length===2)p[1]=p[1].toUpperCase();return p.join("-");}
+function localeOk(actual, expected){return !expected || actual===expected || (actual||"").startsWith(expected + "-u-");}
+function gmt(minutes){const sign=minutes<=0?"+":"-";const abs=Math.abs(minutes);return "GMT"+sign+String(Math.floor(abs/60)).padStart(2,"0")+String(abs%60).padStart(2,"0");}
+const tz=process.env.CAC_TZ||"";
+const locale=norm(process.env.CAC_LANG||"");
+const d=new Date("2026-01-01T12:00:00Z");
+const opts={hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false};
+const ro=Intl.DateTimeFormat().resolvedOptions();
+const emptyRo=Intl.DateTimeFormat([]).resolvedOptions();
+const actual=d.toLocaleTimeString(undefined,opts);
+const emptyActual=d.toLocaleTimeString([],opts);
+const expected=new Intl.DateTimeFormat(ro.locale||locale||undefined,Object.assign({},opts,{timeZone:tz||undefined})).format(d);
+const ok=(!tz||ro.timeZone===tz)&&(!tz||emptyRo.timeZone===tz)&&localeOk(ro.locale||"",locale)&&localeOk(emptyRo.locale||"",locale)&&(!tz||actual===expected)&&(!tz||emptyActual===expected)&&(!tz||d.toString().includes(gmt(d.getTimezoneOffset())));
+process.stdout.write(ok ? "ok" : JSON.stringify({timeZone:ro.timeZone||"",locale:ro.locale||"",emptyTimeZone:emptyRo.timeZone||"",emptyLocale:emptyRo.locale||"",actual,emptyActual,expected,stringValue:d.toString()}));
+'
+
+    case "$runtime" in
+        node)
+            command -v node >/dev/null 2>&1 || { echo "skip"; return 0; }
+            NODE_OPTIONS="--require $hook_option" CAC_TZ="$expected_tz" CAC_LANG="$expected_lang" \
+                node -e "$probe_js" 2>/dev/null || true
+            ;;
+        bun)
+            command -v bun >/dev/null 2>&1 || { echo "skip"; return 0; }
+            BUN_OPTIONS="--preload $hook_option" CAC_TZ="$expected_tz" CAC_LANG="$expected_lang" \
+                bun -e "$probe_js" 2>/dev/null || true
+            ;;
+        *)
+            echo "unknown runtime"
+            return 1
+            ;;
+    esac
+}
+
 _gen_uuid() {
     if command -v uuidgen &>/dev/null; then
         uuidgen
@@ -1458,6 +1694,112 @@ _node_require_path() {
     esac
 }
 
+_provider_routing_keys() {
+    cat <<'EOF'
+ANTHROPIC_BASE_URL
+ANTHROPIC_API_KEY
+ANTHROPIC_AUTH_TOKEN
+ANTHROPIC_AWS_BASE_URL
+ANTHROPIC_AWS_API_KEY
+ANTHROPIC_BEDROCK_BASE_URL
+ANTHROPIC_BEDROCK_MANTLE_BASE_URL
+ANTHROPIC_FOUNDRY_BASE_URL
+ANTHROPIC_VERTEX_BASE_URL
+CLAUDE_CODE_USE_BEDROCK
+CLAUDE_CODE_USE_VERTEX
+CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
+CLAUDE_CODE_PROPAGATE_TRACEPARENT
+EOF
+}
+
+_provider_routing_policy() {
+    local env_dir="$1" proxy="$2" policy=""
+    [[ -f "$env_dir/provider_routing" ]] && policy=$(tr -d '[:space:]' < "$env_dir/provider_routing" 2>/dev/null || true)
+    if [[ -z "$policy" ]]; then
+        if [[ -n "$proxy" ]]; then policy="managed"; else policy="warn"; fi
+    fi
+    case "$policy" in
+        managed|warn|preserve) printf '%s' "$policy" ;;
+        *) if [[ -n "$proxy" ]]; then printf 'managed'; else printf 'warn'; fi ;;
+    esac
+}
+
+_signal_guard_policy() {
+    local env_dir="$1" policy=""
+    [[ -f "$env_dir/signal_guard" ]] && policy=$(tr -d '[:space:]' < "$env_dir/signal_guard" 2>/dev/null || true)
+    case "$policy" in
+        warn|strict) printf '%s' "$policy" ;;
+        *) printf 'warn' ;;
+    esac
+}
+
+_provider_routing_env_keys_present() {
+    local key val found=()
+    while IFS= read -r key; do
+        [[ -n "$key" ]] || continue
+        val="${!key-}"
+        [[ -n "$val" ]] && found+=("$key")
+    done < <(_provider_routing_keys)
+    ((${#found[@]} == 0)) && return 0
+    printf '%s\n' "${found[@]}"
+}
+
+_provider_routing_unset_env() {
+    local key
+    while IFS= read -r key; do
+        [[ -n "$key" ]] && unset "$key"
+    done < <(_provider_routing_keys)
+}
+
+_provider_routing_settings_scan() {
+    local env_dir="$1"
+    local files=(
+        "$env_dir/.claude/settings.json"
+        "$env_dir/.claude/settings.local.json"
+        "$env_dir/.claude/settings.override.json"
+        "$HOME/.claude/settings.json"
+        "$HOME/.claude/settings.local.json"
+        "$HOME/.claude.json"
+    )
+    local existing=() file
+    for file in "${files[@]}"; do
+        [[ -f "$file" ]] && existing+=("$file")
+    done
+    ((${#existing[@]} == 0)) && return 0
+    node -e '
+const fs = require("fs");
+const keys = new Set([
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_AWS_BASE_URL",
+  "ANTHROPIC_AWS_API_KEY",
+  "ANTHROPIC_BEDROCK_BASE_URL",
+  "ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
+  "ANTHROPIC_FOUNDRY_BASE_URL",
+  "ANTHROPIC_VERTEX_BASE_URL",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+  "CLAUDE_CODE_PROPAGATE_TRACEPARENT",
+]);
+function visit(value, file, seen) {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) { value.forEach(function(item) { visit(item, file, seen); }); return; }
+  Object.keys(value).forEach(function(key) {
+    if (keys.has(key)) {
+      const id = file + "\t" + key;
+      if (!seen.has(id)) { seen.add(id); process.stdout.write(file + "\t" + key + "\n"); }
+    }
+    visit(value[key], file, seen);
+  });
+}
+process.argv.slice(1).forEach(function(file) {
+  try { visit(JSON.parse(fs.readFileSync(file, "utf8")), file, new Set()); } catch (_) {}
+});
+' "${existing[@]}" 2>/dev/null || true
+}
+
 _tcp_check() {
     local host="$1" port="$2" timeout_sec="${3:-2}"
     if (echo >"/dev/tcp/$host/$port") 2>/dev/null; then
@@ -1675,11 +2017,15 @@ if [[ -d "$_env_dir/.claude" ]]; then
                [[ "$_env_dir/.claude/settings.override.json" -nt "$_env_dir/.claude/settings.json" ]]; then
                 node -e "
 const fs=require('fs');
-const b=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));
+const keys=new Set(['ANTHROPIC_BASE_URL','ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','ANTHROPIC_AWS_BASE_URL','ANTHROPIC_AWS_API_KEY','ANTHROPIC_BEDROCK_BASE_URL','ANTHROPIC_BEDROCK_MANTLE_BASE_URL','ANTHROPIC_FOUNDRY_BASE_URL','ANTHROPIC_VERTEX_BASE_URL','CLAUDE_CODE_USE_BEDROCK','CLAUDE_CODE_USE_VERTEX','CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST','CLAUDE_CODE_PROPAGATE_TRACEPARENT']);
+function sanitize(v){if(!v||typeof v!=='object')return v;if(Array.isArray(v))return v.map(sanitize);const r={};for(const[k,val]of Object.entries(v)){if(!keys.has(k))r[k]=sanitize(val)}return r}
+let b=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));
 const o=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+const mode=process.argv[4]||'sanitize';
+if(mode!=='preserve')b=sanitize(b);
 function m(b,o){const r={...b};for(const[k,v]of Object.entries(o)){if(k in r&&typeof r[k]==='object'&&r[k]!==null&&typeof v==='object'&&v!==null&&!Array.isArray(r[k])&&!Array.isArray(v)){r[k]=m(r[k],v)}else{r[k]=v}}return r}
 fs.writeFileSync(process.argv[3],JSON.stringify(m(b,o),null,2));
-" "$_src_settings" "$_env_dir/.claude/settings.override.json" "$_env_dir/.claude/settings.json" 2>/dev/null || true
+" "$_src_settings" "$_env_dir/.claude/settings.override.json" "$_env_dir/.claude/settings.json" "$([[ -f "$_env_dir/clone_provider_routing" ]] && tr -d '[:space:]' < "$_env_dir/clone_provider_routing" || echo sanitize)" 2>/dev/null || true
             fi
         fi
     fi
@@ -1770,12 +2116,13 @@ fi
 # ── billing header suppression (x-anthropic-billing-header) ──
 export CLAUDE_CODE_ATTRIBUTION_HEADER=0
 
-# with proxy: force OAuth (clear API config to prevent leaks)
-# without proxy: preserve user's API Key / Base URL
-if [[ -n "$PROXY" ]]; then
-    unset ANTHROPIC_BASE_URL
-    unset ANTHROPIC_AUTH_TOKEN
-    unset ANTHROPIC_API_KEY
+# Provider routing policy:
+# - managed: hide custom provider routing and credential env from Claude.
+# - warn/preserve: keep user env visible, but signal-guard can report or block it.
+_provider_routing_policy=$(_provider_routing_policy "$_env_dir" "$PROXY")
+_signal_guard_policy=$(_signal_guard_policy "$_env_dir")
+if [[ "$_provider_routing_policy" == "managed" ]]; then
+    _provider_routing_unset_env
 fi
 
 # ── git identity spoofing ──
@@ -1875,6 +2222,49 @@ if [[ -f "$_env_dir/lang" ]]; then
     export CAC_LANG="$LANG"
     export LANGUAGE="${LANG%%.*}"
 fi
+
+_provider_env_keys="$(_provider_routing_env_keys_present | paste -sd, - 2>/dev/null || true)"
+_provider_settings_scan="$(_provider_routing_settings_scan "$_env_dir" 2>/dev/null || true)"
+_provider_settings_keys="$(printf '%s\n' "$_provider_settings_scan" | awk -F '\t' 'NF>=2 {print $2}' | sort -u | paste -sd, - 2>/dev/null || true)"
+_provider_signal_visible=false
+[[ -n "$_provider_env_keys" || -n "$_provider_settings_keys" ]] && _provider_signal_visible=true
+_provider_china_tz=false
+case "${TZ:-}" in
+    Asia/Shanghai|Asia/Urumqi) _provider_china_tz=true ;;
+esac
+
+if [[ "$_signal_guard_policy" == "strict" ]]; then
+    _signal_guard_failures=()
+    if [[ -n "$_provider_env_keys" && "$_provider_routing_policy" != "preserve" ]]; then
+        _signal_guard_failures+=("provider routing env visible: $_provider_env_keys")
+    fi
+    if [[ -n "$_provider_settings_keys" ]]; then
+        _signal_guard_failures+=("provider routing key in Claude settings: $_provider_settings_keys")
+    fi
+    if [[ "$_provider_china_tz" == "true" && "$_provider_signal_visible" == "true" && "$_provider_routing_policy" != "preserve" ]]; then
+        _signal_guard_failures+=("custom provider routing with ${TZ:-unknown} timezone requires review")
+    fi
+    if ((${#_signal_guard_failures[@]} > 0)); then
+        echo "[cac] error: signal-guard strict blocked Claude startup" >&2
+        for _sg_issue in "${_signal_guard_failures[@]}"; do
+            echo "[cac] issue: $_sg_issue" >&2
+        done
+        echo "[cac] fix: run 'cac env set $_name provider-routing managed' to hide provider routing env vars." >&2
+        echo "[cac] fix: remove provider routing keys from Claude settings, or run 'cac env set $_name signal-guard warn' after review." >&2
+        exit 1
+    fi
+elif [[ "$_signal_guard_policy" == "warn" ]]; then
+    if [[ -n "$_provider_env_keys" ]]; then
+        echo "[cac] warning: provider routing env visible: $_provider_env_keys (values redacted)" >&2
+    fi
+    if [[ -n "$_provider_settings_keys" ]]; then
+        echo "[cac] warning: provider routing key in Claude settings: $_provider_settings_keys (values redacted)" >&2
+    fi
+    if [[ "$_provider_china_tz" == "true" && "$_provider_signal_visible" == "true" && "$_provider_routing_policy" != "preserve" ]]; then
+        echo "[cac] warning: custom provider routing with ${TZ:-unknown} timezone should be reviewed" >&2
+    fi
+fi
+
 if [[ -f "$_env_dir/hostname" ]]; then
     _hn=$(tr -d '[:space:]' < "$_env_dir/hostname")
     export HOSTNAME="$_hn" CAC_HOSTNAME="$_hn"
@@ -2371,6 +2761,7 @@ _env_clone_source_dir() {
 _env_cmd_create() {
     _require_setup
     local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true persona="" claude_auto_update=false
+    local provider_routing="" signal_guard="" clone_provider_routing="sanitize"
     # Windows: force copy mode (NTFS symlinks require admin privileges)
     case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) clone_link=false ;; esac
 
@@ -2390,14 +2781,20 @@ _env_cmd_create() {
             --persona)   [[ $# -ge 2 ]] || _die "$1 requires a value"; persona="$2"; shift 2
                          [[ "$persona" =~ ^(macos-vscode|macos-cursor|macos-iterm|linux-desktop)$ ]] || _die "invalid persona '$persona' (use macos-vscode, macos-cursor, macos-iterm, or linux-desktop)" ;;
             --autoupdate|--auto-update) claude_auto_update=true; shift ;;
+            --provider-routing) [[ $# -ge 2 ]] || _die "$1 requires a value"; provider_routing="$2"; shift 2
+                         [[ "$provider_routing" =~ ^(managed|warn|preserve)$ ]] || _die "invalid provider-routing '$provider_routing' (use managed, warn, or preserve)" ;;
+            --signal-guard) [[ $# -ge 2 ]] || _die "$1 requires a value"; signal_guard="$2"; shift 2
+                         [[ "$signal_guard" =~ ^(warn|strict)$ ]] || _die "invalid signal-guard '$signal_guard' (use warn or strict)" ;;
             --clone)     shift; if [[ -n "${1:-}" ]] && [[ "${1:-}" != -* ]]; then clone_source="$1"; shift; else clone_source="host"; fi ;;
             --no-link)   clone_link=false; shift ;;
+            --sanitize-provider-routing) clone_provider_routing="sanitize"; shift ;;
+            --preserve-provider-routing) clone_provider_routing="preserve"; [[ -z "$provider_routing" ]] && provider_routing="preserve"; shift ;;
             -*)          _die "unknown option: $1" ;;
             *)           [[ -z "$name" ]] && name="$1" || _die "extra argument: $1"; shift ;;
         esac
     done
 
-    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--clone [source]] [--no-link] [--telemetry <mode>] [--persona <preset>] [--autoupdate]"
+    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--clone [source]] [--no-link] [--telemetry <mode>] [--persona <preset>] [--provider-routing <managed|warn|preserve>] [--signal-guard <warn|strict>] [--autoupdate]"
     [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || _die "invalid name '$name' (use alphanumeric, dash, underscore)"
 
     local env_dir="$ENVS_DIR/$name"
@@ -2485,6 +2882,11 @@ _env_cmd_create() {
     [[ -z "$telemetry_mode" ]] && telemetry_mode=$(_cac_setting telemetry_mode stealth)
     echo "$telemetry_mode" > "$env_dir/telemetry_mode"
 
+    [[ -z "$provider_routing" ]] && provider_routing=$([[ -n "$proxy_url" ]] && echo "managed" || echo "warn")
+    [[ -z "$signal_guard" ]] && signal_guard="warn"
+    echo "$provider_routing" > "$env_dir/provider_routing"
+    echo "$signal_guard" > "$env_dir/signal_guard"
+
     mkdir -p "$env_dir/.claude"
 
     # Initialize settings.json, statusline, and CLAUDE.md
@@ -2525,6 +2927,18 @@ _env_cmd_create() {
                 fi
             fi
             if [[ -f "$src_claude_dir/settings.json" ]]; then
+                local _src_settings_for_merge="$src_claude_dir/settings.json"
+                local _sanitized_src_settings="" _provider_clone_scan=""
+                _provider_clone_scan=$(_provider_routing_settings_scan_paths "$src_claude_dir/settings.json" 2>/dev/null || true)
+                if [[ "$clone_provider_routing" != "preserve" ]] && [[ -n "$_provider_clone_scan" ]]; then
+                    _sanitized_src_settings=$(mktemp)
+                    if _provider_routing_sanitize_settings_file "$src_claude_dir/settings.json" "$_sanitized_src_settings" 2>/dev/null; then
+                        _src_settings_for_merge="$_sanitized_src_settings"
+                    else
+                        rm -f "$_sanitized_src_settings"
+                        _sanitized_src_settings=""
+                    fi
+                fi
                 if [[ "$clone_link" == "true" ]]; then
                     cp "$env_dir/.claude/settings.json" "$env_dir/.claude/settings.override.json"
                     node -e "
@@ -2533,8 +2947,9 @@ const base=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));
 const override=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 function merge(b,o){const r={...b};for(const[k,v]of Object.entries(o)){if(k in r&&typeof r[k]==='object'&&r[k]!==null&&typeof v==='object'&&v!==null&&!Array.isArray(r[k])&&!Array.isArray(v)){r[k]=merge(r[k],v)}else{r[k]=v}}return r}
 fs.writeFileSync(process.argv[3],JSON.stringify(merge(base,override),null,2));
-" "$src_claude_dir/settings.json" "$env_dir/.claude/settings.override.json" "$env_dir/.claude/settings.json"
+" "$_src_settings_for_merge" "$env_dir/.claude/settings.override.json" "$env_dir/.claude/settings.json"
                     echo "$src_claude_dir" > "$env_dir/clone_source"
+                    echo "$clone_provider_routing" > "$env_dir/clone_provider_routing"
                 else
                     local _tmp_override
                     _tmp_override=$(mktemp)
@@ -2545,8 +2960,18 @@ const base=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));
 const override=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 function merge(b,o){const r={...b};for(const[k,v]of Object.entries(o)){if(k in r&&typeof r[k]==='object'&&r[k]!==null&&typeof v==='object'&&v!==null&&!Array.isArray(r[k])&&!Array.isArray(v)){r[k]=merge(r[k],v)}else{r[k]=v}}return r}
 fs.writeFileSync(process.argv[3],JSON.stringify(merge(base,override),null,2));
-" "$src_claude_dir/settings.json" "$_tmp_override" "$env_dir/.claude/settings.json"
+" "$_src_settings_for_merge" "$_tmp_override" "$env_dir/.claude/settings.json"
                     rm -f "$_tmp_override"
+                fi
+                rm -f "$_sanitized_src_settings"
+                if [[ -n "$_provider_clone_scan" ]]; then
+                    local _provider_clone_keys
+                    _provider_clone_keys=$(printf '%s\n' "$_provider_clone_scan" | awk -F '\t' '{print $2}' | sort -u | paste -sd, -)
+                    if [[ "$clone_provider_routing" == "preserve" ]]; then
+                        echo "  $(_yellow "!") provider routing kept: $_provider_clone_keys"
+                    else
+                        echo "  $(_yellow "!") provider routing removed from cloned settings: $_provider_clone_keys"
+                    fi
                 fi
             fi
             local link_mode="linked (synced)"
@@ -2570,6 +2995,8 @@ fs.writeFileSync(process.argv[3],JSON.stringify(merge(base,override),null,2));
     echo
     [[ -n "$proxy_url" ]] && echo "  $(_green "+") proxy    $proxy_url"
     [[ -n "$claude_ver" ]] && echo "  $(_green "+") claude   $(_cyan "$claude_ver")"
+    echo "  $(_green "+") provider $(_cyan "$provider_routing")"
+    echo "  $(_green "+") signal   $(_cyan "$signal_guard")"
     [[ "$claude_auto_update" == "true" ]] && echo "  $(_green "+") auto-update on"
     echo "  $(_green "+") env      $(_dim "${env_dir/#$HOME/~}/.claude/")"
     echo
@@ -2794,7 +3221,7 @@ _env_cmd_set() {
     # Parse: cac env set [name] <key> <value|--remove>
     # If first arg is a known key, use current env; otherwise treat as env name
     local name="" key="" value="" remove=false
-    local known_keys="proxy version telemetry persona tz lang autoupdate auto-update"
+    local known_keys="proxy version telemetry persona tz lang autoupdate auto-update provider-routing provider_routing signal-guard signal_guard"
 
     if [[ $# -lt 1 ]] || [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "help" ]]; then
         echo
@@ -2808,6 +3235,9 @@ _env_cmd_set() {
         echo "    $(_green "set") [name] persona <macos-vscode|macos-cursor|macos-iterm|linux-desktop|--remove>"
         echo "                                                          Terminal preset: inject desktop env vars, hide Docker signals (for containers)"
         echo "    $(_green "set") [name] autoupdate <on|off>             Auto-check Claude Code latest on activation"
+        echo "    $(_green "set") [name] provider-routing <managed|warn|preserve>"
+        echo "                                                          Manage Claude provider routing env exposure"
+        echo "    $(_green "set") [name] signal-guard <warn|strict>       Warn or block risky local signal combinations"
         echo "    $(_green "set") [name] tz <IANA timezone>               Set timezone (e.g. Asia/Shanghai)"
         echo "    $(_green "set") [name] lang <locale>                    Set locale (e.g. zh_CN.UTF-8)"
         echo
@@ -2827,7 +3257,7 @@ _env_cmd_set() {
     _require_env "$name"
     local env_dir="$ENVS_DIR/$name"
 
-    [[ $# -ge 1 ]] || _die "usage: cac env set [name] <proxy|version|telemetry|persona|autoupdate|tz|lang> <value|--remove>"
+    [[ $# -ge 1 ]] || _die "usage: cac env set [name] <proxy|version|telemetry|persona|autoupdate|provider-routing|signal-guard|tz|lang> <value|--remove>"
     key="$1"; shift
 
     # Parse value or --remove
@@ -2912,6 +3342,28 @@ _env_cmd_set() {
                 esac
             fi
             ;;
+        provider-routing|provider_routing)
+            if [[ "$remove" == "true" ]]; then
+                rm -f "$env_dir/provider_routing"
+                echo "$(_green_bold "Removed") provider-routing override from $(_bold "$name")"
+            else
+                [[ -n "$value" ]] || _die "usage: cac env set [name] provider-routing <managed|warn|preserve>"
+                [[ "$value" =~ ^(managed|warn|preserve)$ ]] || _die "invalid provider-routing '$value' (use managed, warn, or preserve)"
+                echo "$value" > "$env_dir/provider_routing"
+                echo "$(_green_bold "Set") provider-routing for $(_bold "$name") -> $(_cyan "$value")"
+            fi
+            ;;
+        signal-guard|signal_guard)
+            if [[ "$remove" == "true" ]]; then
+                rm -f "$env_dir/signal_guard"
+                echo "$(_green_bold "Removed") signal-guard override from $(_bold "$name")"
+            else
+                [[ -n "$value" ]] || _die "usage: cac env set [name] signal-guard <warn|strict>"
+                [[ "$value" =~ ^(warn|strict)$ ]] || _die "invalid signal-guard '$value' (use warn or strict)"
+                echo "$value" > "$env_dir/signal_guard"
+                echo "$(_green_bold "Set") signal-guard for $(_bold "$name") -> $(_cyan "$value")"
+            fi
+            ;;
         tz)
             [[ "$remove" != "true" ]] || _die "cannot remove timezone"
             [[ -n "$value" ]] || _die "usage: cac env set [name] tz <IANA timezone>"
@@ -2927,7 +3379,7 @@ _env_cmd_set() {
             echo "$(_green_bold "Set") locale for $(_bold "$name") → $(_cyan "$value")"
             ;;
         *)
-            _die "unknown key '$key' — use proxy, version, telemetry, persona, autoupdate, tz, or lang"
+            _die "unknown key '$key' — use proxy, version, telemetry, persona, autoupdate, provider-routing, signal-guard, tz, or lang"
             ;;
     esac
 }
@@ -2959,7 +3411,7 @@ cmd_env() {
             echo "                             [--telemetry mode] [--persona preset] [--autoupdate]"
             echo "                             Create isolated environment (auto-activates)"
             echo "    $(_green "set") [name] <key> <value>        Modify environment"
-            echo "                             proxy, version, telemetry, persona, autoupdate, tz, or lang"
+            echo "                             proxy, version, telemetry, persona, autoupdate, provider-routing, signal-guard, tz, or lang"
             echo "    $(_green "sync") [name] [source]            Copy commands, agents, hooks, skills, plugins, CLAUDE.md"
             echo "                             source defaults to host; settings.json is not copied"
             echo "    $(_green "detach") <name>   Stop cloned settings from syncing with the source"
@@ -3489,6 +3941,80 @@ try {
         done
     fi
 
+    # ── Signal guard (provider routing / runtime signal visibility) ──
+    echo
+    echo "  $(_bold "Signal guard")"
+    local provider_policy signal_policy provider_parent_keys provider_child_keys provider_settings_scan provider_settings_keys
+    provider_policy=$(_provider_routing_policy "$env_dir" "$proxy")
+    signal_policy=$(_signal_guard_policy "$env_dir")
+    provider_parent_keys=$(_provider_routing_env_keys_present | paste -sd, - 2>/dev/null || true)
+    provider_child_keys="$provider_parent_keys"
+    [[ "$provider_policy" == "managed" ]] && provider_child_keys=""
+    provider_settings_scan=$(_provider_routing_settings_scan "$env_dir" 2>/dev/null || true)
+    provider_settings_keys=$(printf '%s\n' "$provider_settings_scan" | awk -F '\t' 'NF>=2 {print $2}' | sort -u | paste -sd, - 2>/dev/null || true)
+
+    if [[ "$provider_policy" == "managed" ]]; then
+        if [[ -n "$provider_parent_keys" ]]; then
+            echo "    $(_green "✓") provider routing   managed (hides $provider_parent_keys)"
+        else
+            echo "    $(_green "✓") provider routing   managed"
+        fi
+    elif [[ "$provider_policy" == "preserve" ]]; then
+        echo "    $(_yellow "⚠") provider routing   preserve"
+        [[ -n "$provider_child_keys" ]] && problems+=("provider routing env preserved: $provider_child_keys")
+    else
+        if [[ -n "$provider_child_keys" ]]; then
+            echo "    $(_yellow "⚠") provider routing   warn ($provider_child_keys visible)"
+            problems+=("provider routing env visible: $provider_child_keys")
+        else
+            echo "    $(_green "✓") provider routing   warn (no provider routing env)"
+        fi
+    fi
+
+    if [[ -n "$provider_settings_keys" ]]; then
+        echo "    $(_yellow "⚠") settings scan      provider routing keys: $provider_settings_keys"
+        problems+=("provider routing keys in Claude settings: $provider_settings_keys")
+    else
+        echo "    $(_green "✓") settings scan      no provider routing keys"
+    fi
+
+    local _signal_tz _signal_lang _node_runtime_probe _bun_runtime_probe _signal_hook_path
+    _signal_tz=$(_read "$env_dir/tz" "")
+    _signal_lang=$(_read "$env_dir/lang" "")
+    _signal_hook_path="$CAC_DIR/fingerprint-hook.js"
+    _node_runtime_probe=$(_runtime_intl_probe node "$_signal_hook_path" "$_signal_tz" "$_signal_lang" 2>/dev/null || true)
+    if [[ "$_node_runtime_probe" == "ok" ]]; then
+        echo "    $(_green "✓") runtime timezone   Node Intl probe ok"
+    else
+        echo "    $(_red "✗") runtime timezone   Node Intl probe failed"
+        problems+=("Node runtime timezone/locale probe failed")
+    fi
+    _bun_runtime_probe=$(_runtime_intl_probe bun "$_signal_hook_path" "$_signal_tz" "$_signal_lang" 2>/dev/null || true)
+    if [[ "$_bun_runtime_probe" == "ok" ]]; then
+        echo "    $(_green "✓") bun timezone       Bun Intl probe ok"
+    elif [[ "$_bun_runtime_probe" == "skip" ]]; then
+        echo "    $(_dim "○") bun timezone       skipped (bun not found)"
+    else
+        echo "    $(_red "✗") bun timezone       Bun Intl probe failed"
+        problems+=("Bun runtime timezone/locale probe failed")
+    fi
+
+    local _signal_visible=false
+    [[ -n "$provider_child_keys" || -n "$provider_settings_keys" ]] && _signal_visible=true
+    if [[ "$_signal_visible" == "true" && "$_signal_tz" =~ ^Asia/(Shanghai|Urumqi)$ && "$provider_policy" != "preserve" ]]; then
+        echo "    $(_yellow "⚠") prompt marker      custom provider routing + $_signal_tz requires review"
+        problems+=("custom provider routing with $_signal_tz requires review")
+    else
+        echo "    $(_green "✓") prompt marker      no high-risk local combination"
+    fi
+    local _signal_mode_icon
+    if [[ "$signal_policy" == "strict" ]]; then
+        _signal_mode_icon=$(_green "✓")
+    else
+        _signal_mode_icon=$(_dim "○")
+    fi
+    echo "    $_signal_mode_icon signal mode        $signal_policy"
+
     # ── IPv6 leak detection ──
     local ipv6_leak=false
     if [[ "$os" == "macos" ]]; then
@@ -3667,6 +4193,30 @@ try {
         echo "    $([[ "$_uid_ok" == "true" ]] && _green "✓" || _yellow "⚠") user_id     $(_read "$env_dir/user_id" "—" | cut -c1-16)..."
         echo "    $([[ "$wrapper_content" == *"CLAUDE_CODE_ATTRIBUTION_HEADER"* ]] && _green "✓" || _yellow "⚠") billing     $([[ "$wrapper_content" == *"CLAUDE_CODE_ATTRIBUTION_HEADER"* ]] && echo "disabled" || echo "exposed")"
         [[ -f "$env_dir/persona" ]] && echo "    $(_green "✓") persona     $(_read "$env_dir/persona")"
+        echo
+        echo "  $(_bold "Signal guard")"
+        echo "    $(_dim "provider-routing") $provider_policy"
+        echo "    $(_dim "signal-guard")     $signal_policy"
+        if [[ -n "$provider_parent_keys" ]]; then
+            echo "    $(_dim "parent env keys")   $provider_parent_keys"
+        else
+            echo "    $(_dim "parent env keys")   none"
+        fi
+        if [[ -n "$provider_child_keys" ]]; then
+            echo "    $(_dim "child env keys")    $provider_child_keys"
+        else
+            echo "    $(_dim "child env keys")    none"
+        fi
+        if [[ -n "$provider_settings_scan" ]]; then
+            while IFS=$'\t' read -r _sg_file _sg_key _sg_category; do
+                [[ -n "$_sg_file" && -n "$_sg_key" ]] || continue
+                echo "    $(_yellow "⚠") ${_sg_file/#$HOME/~}  $_sg_key (${_sg_category:-unknown})"
+            done <<< "$provider_settings_scan"
+        else
+            echo "    $(_green "✓") settings files   no provider routing keys"
+        fi
+        echo "    $(_dim "node probe")       ${_node_runtime_probe:-unknown}"
+        echo "    $(_dim "bun probe")        ${_bun_runtime_probe:-unknown}"
         echo
         echo "  $(_bold "Details")"
         echo "    $(_dim "UUID")       $(_read "$env_dir/uuid")"
@@ -4085,6 +4635,69 @@ _claude_cmd_prune() {
     _update_latest 2>/dev/null || true
 }
 
+_claude_audit_status() {
+    local ver="$1" base major minor patch
+    base="${ver%%-*}"
+    [[ "$base" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || {
+        echo "unknown"
+        return
+    }
+    major="${BASH_REMATCH[1]}"
+    minor="${BASH_REMATCH[2]}"
+    patch="${BASH_REMATCH[3]}"
+
+    if [[ "$major" -eq 2 && "$minor" -eq 1 && "$patch" -ge 91 && "$patch" -le 196 ]]; then
+        echo "needs review"
+    else
+        echo "unknown"
+    fi
+}
+
+_claude_cmd_audit() {
+    local target="${1:-current}" ver="" env_name="" bin=""
+    [[ $# -le 1 ]] || _die "usage: cac claude audit [current|<version>]"
+
+    if [[ "$target" == "current" ]]; then
+        env_name=$(_current_env)
+        [[ -n "$env_name" ]] || _die "no active environment"
+        _require_env "$env_name"
+        ver=$(_read "$ENVS_DIR/$env_name/version" "")
+        [[ -n "$ver" ]] || ver="system"
+    else
+        ver="$target"
+    fi
+
+    local status; status=$(_claude_audit_status "$ver")
+    if [[ "$ver" != "system" ]]; then
+        bin=$(_version_binary "$ver")
+    fi
+
+    echo "$(_bold "Claude Code audit")"
+    if [[ -n "$env_name" ]]; then
+        echo "  environment: $(_cyan "$env_name")"
+    fi
+    echo "  version:     $(_cyan "$ver")"
+    if [[ -n "$bin" ]]; then
+        if [[ -x "$bin" ]]; then
+            echo "  binary:      $(_dim "managed package")"
+        else
+            echo "  binary:      $(_yellow "managed package not installed")"
+        fi
+    else
+        echo "  binary:      $(_dim "system or unmanaged")"
+    fi
+    case "$status" in
+        "needs review")
+            echo "  status:      $(_yellow "needs review")"
+            echo "  note:        public reports covered Claude Code 2.1.91 through 2.1.196"
+            ;;
+        *)
+            echo "  status:      $(_yellow "unknown")"
+            echo "  note:        no local marker verdict; do not treat this as known safe"
+            ;;
+    esac
+    echo "  next:        $(_green "cac env check -d")"
+}
 cmd_claude() {
     case "${1:-help}" in
         install)    _claude_cmd_install "${@:2}" ;;
@@ -4093,6 +4706,7 @@ cmd_claude() {
         pin)        _claude_cmd_pin "${@:2}" ;;
         update)     _claude_cmd_update "${@:2}" ;;
         prune)      _claude_cmd_prune "${@:2}" ;;
+        audit)      _claude_cmd_audit "${@:2}" ;;
         help|-h|--help)
             echo "$(_bold "cac claude") — Claude Code version management"
             echo
@@ -4102,6 +4716,7 @@ cmd_claude() {
             echo "  $(_bold "pin") <ver>               Pin current environment to a version"
             echo "  $(_bold "update") [env]            Update an environment to remote latest"
             echo "  $(_bold "prune") [--yes]           List or remove versions not used by envs"
+            echo "  $(_bold "audit") [current|<ver>]   Show conservative provider-routing risk status"
             ;;
         *) _die "unknown: cac claude $1" ;;
     esac
@@ -4734,7 +5349,9 @@ cmd_help() {
 
     echo "  $(_bold "Environment")"
     echo "    $(_green "cac env create") <name> [-p proxy] [-c ver] [--clone [source]] [--no-link] [--autoupdate]"
+    echo "                                      [--provider-routing mode] [--signal-guard mode]"
     echo "    $(_green "cac env set") [name] <key> <value>   Modify environment"
+    echo "                                      provider-routing, signal-guard, proxy, version, telemetry"
     echo "    $(_green "cac env sync") [name] [source]       Copy cloned assets, not settings"
     echo "    $(_green "cac env ls")                  List all environments"
     echo "    $(_green "cac env rm") <name>           Remove an environment"
