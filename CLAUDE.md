@@ -112,6 +112,8 @@ When implementing a new feature, the following must be completed alongside the c
 2. **Upgrade impact** — since users clone this repo to install, state explicitly whether existing users need to re-run `cac setup`, re-create environments, or perform any migration steps after pulling the update. If no action is needed, say so.
 3. **Uninstall impact** — if the feature creates new files, directories, services, scheduled tasks, or system-level artifacts outside `~/.cac/`, document the additional cleanup steps users must take when running `cac self uninstall`. If the feature is fully contained within the existing uninstall path, note that no extra steps are required.
 
+4. **Version bump** - for any new feature or runtime behavior change, bump `CAC_VERSION` in `src/utils.sh` and the matching `version` fields in `package.json` / `package-lock.json`, then run `bash build.sh`. Existing installed wrappers use `CAC_WRAPPER_VER` and only auto-regenerate when it differs from `CAC_VERSION`, so missing this bump can leave users on stale wrapper logic after pulling.
+
 ## Coding Style
 
 - Bash: `#!/usr/bin/env bash` + `set -euo pipefail`, 4-space indentation inside blocks, small helper functions, internal helpers use `_snake_case`

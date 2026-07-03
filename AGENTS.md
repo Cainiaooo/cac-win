@@ -17,6 +17,8 @@ bash tests/test-windows.sh
 
 `bash build.sh` regenerates `cac`, `relay.js`, `fingerprint-hook.js`, and `cac-dns-guard.js`. Run it after every `src/` change and commit the rebuilt `cac` with the source edit.
 
+When implementing a new feature or changing runtime behavior, bump the fork version in `src/utils.sh` (`CAC_VERSION`) and `package.json` / `package-lock.json`, then run `bash build.sh`. Existing `~/.cac/bin/claude` wrappers only auto-regenerate when their embedded `CAC_WRAPPER_VER` differs from `CAC_VERSION`, so missing this bump can leave users on stale wrapper logic after pulling.
+
 ## Coding Style & Naming Conventions
 Follow existing Bash style: `#!/usr/bin/env bash`, `set -euo pipefail`, small helper functions, and 4-space indentation inside blocks. Name command modules `cmd_<topic>.sh`; internal helpers use `_snake_case`. Keep comments brief and operational. For JS, match the current CommonJS/Node-14-compatible style: `var`, semicolons, and minimal syntax. Prefer extending existing files over adding new entrypoints unless the command surface changes.
 
