@@ -66,6 +66,28 @@ _native_path() {
     esac
 }
 
+_display_path_with_home() {
+    local path="$1" home_path="$2"
+    [[ -n "$home_path" ]] || return 1
+    if [[ "${path:0:${#home_path}}" == "$home_path" ]]; then
+        printf '~%s' "${path:${#home_path}}"
+        return 0
+    fi
+    return 1
+}
+
+_display_path() {
+    local path="$1" home_path="${HOME:-}" home_native="" home_mixed=""
+    _display_path_with_home "$path" "$home_path" && return 0
+    if command -v cygpath >/dev/null 2>&1 && [[ -n "$home_path" ]]; then
+        home_native=$(cygpath -w "$home_path" 2>/dev/null || true)
+        _display_path_with_home "$path" "$home_native" && return 0
+        home_mixed=$(cygpath -m "$home_path" 2>/dev/null || true)
+        _display_path_with_home "$path" "$home_mixed" && return 0
+    fi
+    printf '%s' "$path"
+}
+
 # Path form for NODE_OPTIONS / BUN_OPTIONS only.
 _node_require_path() {
     local path="$1"
@@ -3987,14 +4009,28 @@ try {
     # ── Signal guard (provider routing / runtime signal visibility) ──
     echo
     echo "  $(_bold "Signal guard")"
-    local provider_policy signal_policy provider_parent_keys provider_child_keys provider_settings_scan provider_settings_keys
+    local provider_policy signal_policy provider_parent_keys provider_child_keys
+    local provider_settings_scan provider_settings_keys provider_settings_reference_scan provider_settings_reference_keys
     provider_policy=$(_provider_routing_policy "$env_dir" "$proxy")
     signal_policy=$(_signal_guard_policy "$env_dir")
     provider_parent_keys=$(_provider_routing_env_keys_present | paste -sd, - 2>/dev/null || true)
     provider_child_keys="$provider_parent_keys"
     [[ "$provider_policy" == "managed" ]] && provider_child_keys=""
-    provider_settings_scan=$(_provider_routing_settings_scan "$env_dir" 2>/dev/null || true)
+    local _provider_settings_files=() _provider_settings_reference_files=() _settings_file
+    for _settings_file in \
+        "$env_dir/.claude/settings.json" \
+        "$env_dir/.claude/settings.local.json" \
+        "$env_dir/.claude/settings.override.json" \
+        "$HOME/.claude.json"; do
+        [[ -f "$_settings_file" ]] && _provider_settings_files+=("$_settings_file")
+    done
+    provider_settings_scan=$(_provider_routing_settings_scan_paths "${_provider_settings_files[@]}" 2>/dev/null || true)
     provider_settings_keys=$(printf '%s\n' "$provider_settings_scan" | awk -F '\t' 'NF>=2 {print $2}' | sort -u | paste -sd, - 2>/dev/null || true)
+    for _settings_file in "$HOME/.claude/settings.json" "$HOME/.claude/settings.local.json"; do
+        [[ -f "$_settings_file" ]] && _provider_settings_reference_files+=("$_settings_file")
+    done
+    provider_settings_reference_scan=$(_provider_routing_settings_scan_paths "${_provider_settings_reference_files[@]}" 2>/dev/null || true)
+    provider_settings_reference_keys=$(printf '%s\n' "$provider_settings_reference_scan" | awk -F '\t' 'NF>=2 {print $2}' | sort -u | paste -sd, - 2>/dev/null || true)
 
     if [[ "$provider_policy" == "managed" ]]; then
         if [[ -n "$provider_parent_keys" ]]; then
@@ -4019,6 +4055,9 @@ try {
         problems+=("provider routing keys in Claude settings: $provider_settings_keys")
     else
         echo "    $(_green "✓") settings scan      no provider routing keys"
+    fi
+    if [[ -n "$provider_settings_reference_keys" ]]; then
+        echo "    $(_yellow "⚠") host settings      reference only: $provider_settings_reference_keys"
     fi
 
     local _signal_tz _signal_lang _node_runtime_probe _bun_runtime_probe _signal_hook_path
@@ -4253,10 +4292,16 @@ try {
         if [[ -n "$provider_settings_scan" ]]; then
             while IFS=$'\t' read -r _sg_file _sg_key _sg_category; do
                 [[ -n "$_sg_file" && -n "$_sg_key" ]] || continue
-                echo "    $(_yellow "⚠") ${_sg_file/#$HOME/~}  $_sg_key (${_sg_category:-unknown})"
+                echo "    $(_yellow "⚠") $(_display_path "$_sg_file")  $_sg_key (${_sg_category:-unknown})"
             done <<< "$provider_settings_scan"
         else
             echo "    $(_green "✓") settings files   no provider routing keys"
+        fi
+        if [[ -n "$provider_settings_reference_scan" ]]; then
+            while IFS=$'\t' read -r _sg_file _sg_key _sg_category; do
+                [[ -n "$_sg_file" && -n "$_sg_key" ]] || continue
+                echo "    $(_yellow "⚠") $(_display_path "$_sg_file")  $_sg_key (${_sg_category:-unknown}, reference only)"
+            done <<< "$provider_settings_reference_scan"
         fi
         echo "    $(_dim "node probe")       ${_node_runtime_probe:-unknown}"
         echo "    $(_dim "bun probe")        ${_bun_runtime_probe:-unknown}"

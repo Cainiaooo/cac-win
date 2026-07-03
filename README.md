@@ -392,6 +392,8 @@ cac env create work --clone --preserve-provider-routing
 
 The sanitize mode removes only known provider-routing key names from cloned `settings.json`; commands, agents, hooks, skills, plugins, and normal settings remain unchanged. Output shows key names only.
 
+Upgrade/uninstall impact: existing environments do not need to be recreated and users do not need to re-run setup after pulling this update. The new `provider_routing`, `signal_guard`, and `clone_provider_routing` files live under `~/.cac/envs/<name>/`, so `cac self delete` removes them with the rest of the cac runtime data and no extra uninstall steps are required.
+
 ### Relay 模式（TUN 代理穿透）
 
 当使用 TUN 模式代理（Clash TUN、sing-box 等）时，所有流量被虚拟网卡拦截，可能导致 cac 的代理配置无法正常工作。Relay 模式在本地启动一个 TCP 中继来解决这个问题。
@@ -762,6 +764,8 @@ cac env create work --clone --preserve-provider-routing
 ```
 
 Clone sanitization is the default. It removes known provider-routing key names from cloned `settings.json` without printing values.
+
+Upgrade/uninstall impact: existing environments remain compatible and do not need to be recreated or migrated. The new per-env control files stay inside `~/.cac/envs/<name>/`, so `cac self delete` covers uninstall cleanup without extra steps.
 
 ### Relay mode (TUN proxy bypass)
 

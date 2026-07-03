@@ -56,6 +56,28 @@ _native_path() {
     esac
 }
 
+_display_path_with_home() {
+    local path="$1" home_path="$2"
+    [[ -n "$home_path" ]] || return 1
+    if [[ "${path:0:${#home_path}}" == "$home_path" ]]; then
+        printf '~%s' "${path:${#home_path}}"
+        return 0
+    fi
+    return 1
+}
+
+_display_path() {
+    local path="$1" home_path="${HOME:-}" home_native="" home_mixed=""
+    _display_path_with_home "$path" "$home_path" && return 0
+    if command -v cygpath >/dev/null 2>&1 && [[ -n "$home_path" ]]; then
+        home_native=$(cygpath -w "$home_path" 2>/dev/null || true)
+        _display_path_with_home "$path" "$home_native" && return 0
+        home_mixed=$(cygpath -m "$home_path" 2>/dev/null || true)
+        _display_path_with_home "$path" "$home_mixed" && return 0
+    fi
+    printf '%s' "$path"
+}
+
 # Path form for NODE_OPTIONS / BUN_OPTIONS only.
 _node_require_path() {
     local path="$1"

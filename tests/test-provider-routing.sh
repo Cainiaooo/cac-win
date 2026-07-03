@@ -140,7 +140,21 @@ assert_not_contains "$scan_out" "test-secret-redacted" "settings scanner redacts
 check_out="$(cmd_check -d 2>&1 || true)"
 assert_contains "$check_out" "Signal guard" "env check shows Signal guard section"
 assert_contains "$check_out" "ANTHROPIC_BASE_URL" "env check details show provider key name"
+assert_contains "$check_out" "host settings" "env check reports host settings as reference"
 assert_not_contains "$check_out" "test-secret-redacted" "env check redacts provider settings values"
+rm -rf "$sandbox"
+
+reset_sandbox
+make_env host_only_check
+mkdir -p "$HOME/.claude"
+echo '{"env":{"ANTHROPIC_API_KEY":"test-secret-redacted"}}' > "$HOME/.claude/settings.json"
+host_check_out="$(cmd_check -d 2>&1 || true)"
+assert_contains "$host_check_out" "host settings" "env check reports host-only settings as reference"
+assert_contains "$host_check_out" "reference only" "env check marks host-only settings reference-only"
+assert_not_contains "$host_check_out" "provider routing keys in Claude settings: ANTHROPIC_API_KEY" "env check does not fail isolated env for host settings"
+display_path="$(_display_path "$(_native_path "$HOME/.claude/settings.json")")"
+[[ "$display_path" == "~"* ]] && pass "display path abbreviates native home path" || fail "display path did not abbreviate native home path: $display_path"
+assert_not_contains "$host_check_out" "test-secret-redacted" "host-only env check redacts secret values"
 rm -rf "$sandbox"
 
 reset_sandbox
