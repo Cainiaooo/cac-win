@@ -355,6 +355,69 @@ _claude_cmd_prune() {
     _update_latest 2>/dev/null || true
 }
 
+_claude_audit_status() {
+    local ver="$1" base major minor patch
+    base="${ver%%-*}"
+    [[ "$base" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || {
+        echo "unknown"
+        return
+    }
+    major="${BASH_REMATCH[1]}"
+    minor="${BASH_REMATCH[2]}"
+    patch="${BASH_REMATCH[3]}"
+
+    if [[ "$major" -eq 2 && "$minor" -eq 1 && "$patch" -ge 91 && "$patch" -le 196 ]]; then
+        echo "needs review"
+    else
+        echo "unknown"
+    fi
+}
+
+_claude_cmd_audit() {
+    local target="${1:-current}" ver="" env_name="" bin=""
+    [[ $# -le 1 ]] || _die "usage: cac claude audit [current|<version>]"
+
+    if [[ "$target" == "current" ]]; then
+        env_name=$(_current_env)
+        [[ -n "$env_name" ]] || _die "no active environment"
+        _require_env "$env_name"
+        ver=$(_read "$ENVS_DIR/$env_name/version" "")
+        [[ -n "$ver" ]] || ver="system"
+    else
+        ver="$target"
+    fi
+
+    local status; status=$(_claude_audit_status "$ver")
+    if [[ "$ver" != "system" ]]; then
+        bin=$(_version_binary "$ver")
+    fi
+
+    echo "$(_bold "Claude Code audit")"
+    if [[ -n "$env_name" ]]; then
+        echo "  environment: $(_cyan "$env_name")"
+    fi
+    echo "  version:     $(_cyan "$ver")"
+    if [[ -n "$bin" ]]; then
+        if [[ -x "$bin" ]]; then
+            echo "  binary:      $(_dim "managed package")"
+        else
+            echo "  binary:      $(_yellow "managed package not installed")"
+        fi
+    else
+        echo "  binary:      $(_dim "system or unmanaged")"
+    fi
+    case "$status" in
+        "needs review")
+            echo "  status:      $(_yellow "needs review")"
+            echo "  note:        public reports covered Claude Code 2.1.91 through 2.1.196"
+            ;;
+        *)
+            echo "  status:      $(_yellow "unknown")"
+            echo "  note:        no local marker verdict; do not treat this as known safe"
+            ;;
+    esac
+    echo "  next:        $(_green "cac env check -d")"
+}
 cmd_claude() {
     case "${1:-help}" in
         install)    _claude_cmd_install "${@:2}" ;;
@@ -363,6 +426,7 @@ cmd_claude() {
         pin)        _claude_cmd_pin "${@:2}" ;;
         update)     _claude_cmd_update "${@:2}" ;;
         prune)      _claude_cmd_prune "${@:2}" ;;
+        audit)      _claude_cmd_audit "${@:2}" ;;
         help|-h|--help)
             echo "$(_bold "cac claude") — Claude Code version management"
             echo
@@ -372,6 +436,7 @@ cmd_claude() {
             echo "  $(_bold "pin") <ver>               Pin current environment to a version"
             echo "  $(_bold "update") [env]            Update an environment to remote latest"
             echo "  $(_bold "prune") [--yes]           List or remove versions not used by envs"
+            echo "  $(_bold "audit") [current|<ver>]   Show conservative provider-routing risk status"
             ;;
         *) _die "unknown: cac claude $1" ;;
     esac

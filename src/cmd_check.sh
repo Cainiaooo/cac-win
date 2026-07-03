@@ -196,6 +196,97 @@ try {
         done
     fi
 
+    # ── Signal guard (provider routing / runtime signal visibility) ──
+    echo
+    echo "  $(_bold "Signal guard")"
+    local provider_policy signal_policy provider_parent_keys provider_child_keys
+    local provider_settings_scan provider_settings_keys provider_settings_reference_scan provider_settings_reference_keys
+    provider_policy=$(_provider_routing_policy "$env_dir" "$proxy")
+    signal_policy=$(_signal_guard_policy "$env_dir")
+    provider_parent_keys=$(_provider_routing_env_keys_present | paste -sd, - 2>/dev/null || true)
+    provider_child_keys="$provider_parent_keys"
+    [[ "$provider_policy" == "managed" ]] && provider_child_keys=""
+    local _provider_settings_files=() _provider_settings_reference_files=() _settings_file
+    for _settings_file in \
+        "$env_dir/.claude/settings.json" \
+        "$env_dir/.claude/settings.local.json" \
+        "$env_dir/.claude/settings.override.json" \
+        "$HOME/.claude.json"; do
+        [[ -f "$_settings_file" ]] && _provider_settings_files+=("$_settings_file")
+    done
+    provider_settings_scan=$(_provider_routing_settings_scan_paths "${_provider_settings_files[@]}" 2>/dev/null || true)
+    provider_settings_keys=$(printf '%s\n' "$provider_settings_scan" | awk -F '\t' 'NF>=2 {print $2}' | sort -u | paste -sd, - 2>/dev/null || true)
+    for _settings_file in "$HOME/.claude/settings.json" "$HOME/.claude/settings.local.json"; do
+        [[ -f "$_settings_file" ]] && _provider_settings_reference_files+=("$_settings_file")
+    done
+    provider_settings_reference_scan=$(_provider_routing_settings_scan_paths "${_provider_settings_reference_files[@]}" 2>/dev/null || true)
+    provider_settings_reference_keys=$(printf '%s\n' "$provider_settings_reference_scan" | awk -F '\t' 'NF>=2 {print $2}' | sort -u | paste -sd, - 2>/dev/null || true)
+
+    if [[ "$provider_policy" == "managed" ]]; then
+        if [[ -n "$provider_parent_keys" ]]; then
+            echo "    $(_green "✓") provider routing   managed (hides $provider_parent_keys)"
+        else
+            echo "    $(_green "✓") provider routing   managed"
+        fi
+    elif [[ "$provider_policy" == "preserve" ]]; then
+        echo "    $(_yellow "⚠") provider routing   preserve"
+        [[ -n "$provider_child_keys" ]] && problems+=("provider routing env preserved: $provider_child_keys")
+    else
+        if [[ -n "$provider_child_keys" ]]; then
+            echo "    $(_yellow "⚠") provider routing   warn ($provider_child_keys visible)"
+            problems+=("provider routing env visible: $provider_child_keys")
+        else
+            echo "    $(_green "✓") provider routing   warn (no provider routing env)"
+        fi
+    fi
+
+    if [[ -n "$provider_settings_keys" ]]; then
+        echo "    $(_yellow "⚠") settings scan      provider routing keys: $provider_settings_keys"
+        problems+=("provider routing keys in Claude settings: $provider_settings_keys")
+    else
+        echo "    $(_green "✓") settings scan      no provider routing keys"
+    fi
+    if [[ -n "$provider_settings_reference_keys" ]]; then
+        echo "    $(_yellow "⚠") host settings      reference only: $provider_settings_reference_keys"
+    fi
+
+    local _signal_tz _signal_lang _node_runtime_probe _bun_runtime_probe _signal_hook_path
+    _signal_tz=$(_read "$env_dir/tz" "")
+    _signal_lang=$(_read "$env_dir/lang" "")
+    _signal_hook_path="$CAC_DIR/fingerprint-hook.js"
+    _node_runtime_probe=$(_runtime_intl_probe node "$_signal_hook_path" "$_signal_tz" "$_signal_lang" 2>/dev/null || true)
+    if [[ "$_node_runtime_probe" == "ok" ]]; then
+        echo "    $(_green "✓") runtime timezone   Node Intl probe ok"
+    else
+        echo "    $(_red "✗") runtime timezone   Node Intl probe failed"
+        problems+=("Node runtime timezone/locale probe failed")
+    fi
+    _bun_runtime_probe=$(_runtime_intl_probe bun "$_signal_hook_path" "$_signal_tz" "$_signal_lang" 2>/dev/null || true)
+    if [[ "$_bun_runtime_probe" == "ok" ]]; then
+        echo "    $(_green "✓") bun timezone       Bun Intl probe ok"
+    elif [[ "$_bun_runtime_probe" == "skip" ]]; then
+        echo "    $(_dim "○") bun timezone       skipped (bun not found)"
+    else
+        echo "    $(_red "✗") bun timezone       Bun Intl probe failed"
+        problems+=("Bun runtime timezone/locale probe failed")
+    fi
+
+    local _signal_visible=false
+    [[ -n "$provider_child_keys" || -n "$provider_settings_keys" ]] && _signal_visible=true
+    if [[ "$_signal_visible" == "true" && "$_signal_tz" =~ ^Asia/(Shanghai|Urumqi)$ && "$provider_policy" != "preserve" ]]; then
+        echo "    $(_yellow "⚠") prompt marker      custom provider routing + $_signal_tz requires review"
+        problems+=("custom provider routing with $_signal_tz requires review")
+    else
+        echo "    $(_green "✓") prompt marker      no high-risk local combination"
+    fi
+    local _signal_mode_icon
+    if [[ "$signal_policy" == "strict" ]]; then
+        _signal_mode_icon=$(_green "✓")
+    else
+        _signal_mode_icon=$(_dim "○")
+    fi
+    echo "    $_signal_mode_icon signal mode        $signal_policy"
+
     # ── IPv6 leak detection ──
     local ipv6_leak=false
     if [[ "$os" == "macos" ]]; then
@@ -374,6 +465,36 @@ try {
         echo "    $([[ "$_uid_ok" == "true" ]] && _green "✓" || _yellow "⚠") user_id     $(_read "$env_dir/user_id" "—" | cut -c1-16)..."
         echo "    $([[ "$wrapper_content" == *"CLAUDE_CODE_ATTRIBUTION_HEADER"* ]] && _green "✓" || _yellow "⚠") billing     $([[ "$wrapper_content" == *"CLAUDE_CODE_ATTRIBUTION_HEADER"* ]] && echo "disabled" || echo "exposed")"
         [[ -f "$env_dir/persona" ]] && echo "    $(_green "✓") persona     $(_read "$env_dir/persona")"
+        echo
+        echo "  $(_bold "Signal guard")"
+        echo "    $(_dim "provider-routing") $provider_policy"
+        echo "    $(_dim "signal-guard")     $signal_policy"
+        if [[ -n "$provider_parent_keys" ]]; then
+            echo "    $(_dim "parent env keys")   $provider_parent_keys"
+        else
+            echo "    $(_dim "parent env keys")   none"
+        fi
+        if [[ -n "$provider_child_keys" ]]; then
+            echo "    $(_dim "child env keys")    $provider_child_keys"
+        else
+            echo "    $(_dim "child env keys")    none"
+        fi
+        if [[ -n "$provider_settings_scan" ]]; then
+            while IFS=$'\t' read -r _sg_file _sg_key _sg_category; do
+                [[ -n "$_sg_file" && -n "$_sg_key" ]] || continue
+                echo "    $(_yellow "⚠") $(_display_path "$_sg_file")  $_sg_key (${_sg_category:-unknown})"
+            done <<< "$provider_settings_scan"
+        else
+            echo "    $(_green "✓") settings files   no provider routing keys"
+        fi
+        if [[ -n "$provider_settings_reference_scan" ]]; then
+            while IFS=$'\t' read -r _sg_file _sg_key _sg_category; do
+                [[ -n "$_sg_file" && -n "$_sg_key" ]] || continue
+                echo "    $(_yellow "⚠") $(_display_path "$_sg_file")  $_sg_key (${_sg_category:-unknown}, reference only)"
+            done <<< "$provider_settings_reference_scan"
+        fi
+        echo "    $(_dim "node probe")       ${_node_runtime_probe:-unknown}"
+        echo "    $(_dim "bun probe")        ${_bun_runtime_probe:-unknown}"
         echo
         echo "  $(_bold "Details")"
         echo "    $(_dim "UUID")       $(_read "$env_dir/uuid")"

@@ -20,9 +20,56 @@ _env_clone_source_dir() {
     echo "$src_claude_dir"
 }
 
+
+_env_resolve_dir() {
+    local dir="$1"
+    (
+        cd "$dir" 2>/dev/null && pwd -P
+    )
+}
+
+_env_sync_claude_md() {
+    local src_file="$1"
+    local config_dir="$2"
+    local env_name="$3"
+    local sync_mode="$4"
+    local target_file="$config_dir/CLAUDE.md"
+    local stripped_file=""
+
+    stripped_file=$(mktemp)
+    if awk '
+        BEGIN { managed=0 }
+        {
+            line=$0
+            sub(/\r$/, "", line)
+            if (line == "# cac managed environment") managed=1
+            if (!managed) print $0
+        }
+        END { exit managed ? 0 : 1 }
+    ' "$src_file" > "$stripped_file"; then
+        rm -f "$target_file"
+        if [[ -s "$stripped_file" ]]; then
+            cp "$stripped_file" "$target_file"
+            _write_env_claude_md "$config_dir" "$env_name" --append
+        else
+            _write_env_claude_md "$config_dir" "$env_name"
+        fi
+    else
+        rm -f "$target_file"
+        if [[ "$sync_mode" == "linked" ]]; then
+            ln -sf "$src_file" "$target_file"
+        else
+            cp -L "$src_file" "$target_file"
+            _write_env_claude_md "$config_dir" "$env_name" --append
+        fi
+    fi
+    rm -f "$stripped_file"
+}
+
 _env_cmd_create() {
     _require_setup
     local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true persona="" claude_auto_update=false
+    local provider_routing="" signal_guard="" clone_provider_routing="sanitize"
     # Windows: force copy mode (NTFS symlinks require admin privileges)
     case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) clone_link=false ;; esac
 
@@ -42,14 +89,20 @@ _env_cmd_create() {
             --persona)   [[ $# -ge 2 ]] || _die "$1 requires a value"; persona="$2"; shift 2
                          [[ "$persona" =~ ^(macos-vscode|macos-cursor|macos-iterm|linux-desktop)$ ]] || _die "invalid persona '$persona' (use macos-vscode, macos-cursor, macos-iterm, or linux-desktop)" ;;
             --autoupdate|--auto-update) claude_auto_update=true; shift ;;
+            --provider-routing) [[ $# -ge 2 ]] || _die "$1 requires a value"; provider_routing="$2"; shift 2
+                         [[ "$provider_routing" =~ ^(managed|warn|preserve)$ ]] || _die "invalid provider-routing '$provider_routing' (use managed, warn, or preserve)" ;;
+            --signal-guard) [[ $# -ge 2 ]] || _die "$1 requires a value"; signal_guard="$2"; shift 2
+                         [[ "$signal_guard" =~ ^(warn|strict)$ ]] || _die "invalid signal-guard '$signal_guard' (use warn or strict)" ;;
             --clone)     shift; if [[ -n "${1:-}" ]] && [[ "${1:-}" != -* ]]; then clone_source="$1"; shift; else clone_source="host"; fi ;;
             --no-link)   clone_link=false; shift ;;
+            --sanitize-provider-routing) clone_provider_routing="sanitize"; shift ;;
+            --preserve-provider-routing) clone_provider_routing="preserve"; [[ -z "$provider_routing" ]] && provider_routing="preserve"; shift ;;
             -*)          _die "unknown option: $1" ;;
             *)           [[ -z "$name" ]] && name="$1" || _die "extra argument: $1"; shift ;;
         esac
     done
 
-    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--clone [source]] [--no-link] [--telemetry <mode>] [--persona <preset>] [--autoupdate]"
+    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--clone [source]] [--no-link] [--telemetry <mode>] [--persona <preset>] [--provider-routing <managed|warn|preserve>] [--signal-guard <warn|strict>] [--autoupdate]"
     [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || _die "invalid name '$name' (use alphanumeric, dash, underscore)"
 
     local env_dir="$ENVS_DIR/$name"
@@ -137,6 +190,11 @@ _env_cmd_create() {
     [[ -z "$telemetry_mode" ]] && telemetry_mode=$(_cac_setting telemetry_mode stealth)
     echo "$telemetry_mode" > "$env_dir/telemetry_mode"
 
+    [[ -z "$provider_routing" ]] && provider_routing=$([[ -n "$proxy_url" ]] && echo "managed" || echo "warn")
+    [[ -z "$signal_guard" ]] && signal_guard="warn"
+    echo "$provider_routing" > "$env_dir/provider_routing"
+    echo "$signal_guard" > "$env_dir/signal_guard"
+
     mkdir -p "$env_dir/.claude"
 
     # Initialize settings.json, statusline, and CLAUDE.md
@@ -177,6 +235,18 @@ _env_cmd_create() {
                 fi
             fi
             if [[ -f "$src_claude_dir/settings.json" ]]; then
+                local _src_settings_for_merge="$src_claude_dir/settings.json"
+                local _sanitized_src_settings="" _provider_clone_scan=""
+                _provider_clone_scan=$(_provider_routing_settings_scan_paths "$src_claude_dir/settings.json" 2>/dev/null || true)
+                if [[ "$clone_provider_routing" != "preserve" ]] && [[ -n "$_provider_clone_scan" ]]; then
+                    _sanitized_src_settings=$(mktemp)
+                    if _provider_routing_sanitize_settings_file "$src_claude_dir/settings.json" "$_sanitized_src_settings" 2>/dev/null; then
+                        _src_settings_for_merge="$_sanitized_src_settings"
+                    else
+                        rm -f "$_sanitized_src_settings"
+                        _sanitized_src_settings=""
+                    fi
+                fi
                 if [[ "$clone_link" == "true" ]]; then
                     cp "$env_dir/.claude/settings.json" "$env_dir/.claude/settings.override.json"
                     node -e "
@@ -185,8 +255,9 @@ const base=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));
 const override=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 function merge(b,o){const r={...b};for(const[k,v]of Object.entries(o)){if(k in r&&typeof r[k]==='object'&&r[k]!==null&&typeof v==='object'&&v!==null&&!Array.isArray(r[k])&&!Array.isArray(v)){r[k]=merge(r[k],v)}else{r[k]=v}}return r}
 fs.writeFileSync(process.argv[3],JSON.stringify(merge(base,override),null,2));
-" "$src_claude_dir/settings.json" "$env_dir/.claude/settings.override.json" "$env_dir/.claude/settings.json"
+" "$_src_settings_for_merge" "$env_dir/.claude/settings.override.json" "$env_dir/.claude/settings.json"
                     echo "$src_claude_dir" > "$env_dir/clone_source"
+                    echo "$clone_provider_routing" > "$env_dir/clone_provider_routing"
                 else
                     local _tmp_override
                     _tmp_override=$(mktemp)
@@ -197,8 +268,18 @@ const base=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));
 const override=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 function merge(b,o){const r={...b};for(const[k,v]of Object.entries(o)){if(k in r&&typeof r[k]==='object'&&r[k]!==null&&typeof v==='object'&&v!==null&&!Array.isArray(r[k])&&!Array.isArray(v)){r[k]=merge(r[k],v)}else{r[k]=v}}return r}
 fs.writeFileSync(process.argv[3],JSON.stringify(merge(base,override),null,2));
-" "$src_claude_dir/settings.json" "$_tmp_override" "$env_dir/.claude/settings.json"
+" "$_src_settings_for_merge" "$_tmp_override" "$env_dir/.claude/settings.json"
                     rm -f "$_tmp_override"
+                fi
+                rm -f "$_sanitized_src_settings"
+                if [[ -n "$_provider_clone_scan" ]]; then
+                    local _provider_clone_keys
+                    _provider_clone_keys=$(printf '%s\n' "$_provider_clone_scan" | awk -F '\t' '{print $2}' | sort -u | paste -sd, -)
+                    if [[ "$clone_provider_routing" == "preserve" ]]; then
+                        echo "  $(_yellow "!") provider routing kept: $_provider_clone_keys"
+                    else
+                        echo "  $(_yellow "!") provider routing removed from cloned settings: $_provider_clone_keys"
+                    fi
                 fi
             fi
             local link_mode="linked (synced)"
@@ -222,6 +303,8 @@ fs.writeFileSync(process.argv[3],JSON.stringify(merge(base,override),null,2));
     echo
     [[ -n "$proxy_url" ]] && echo "  $(_green "+") proxy    $proxy_url"
     [[ -n "$claude_ver" ]] && echo "  $(_green "+") claude   $(_cyan "$claude_ver")"
+    echo "  $(_green "+") provider $(_cyan "$provider_routing")"
+    echo "  $(_green "+") signal   $(_cyan "$signal_guard")"
     [[ "$claude_auto_update" == "true" ]] && echo "  $(_green "+") auto-update on"
     echo "  $(_green "+") env      $(_dim "${env_dir/#$HOME/~}/.claude/")"
     echo
@@ -358,6 +441,11 @@ _env_cmd_sync() {
     src_claude_dir=$(_env_clone_source_dir "$source")
 
     mkdir -p "$env_dir/.claude"
+    local resolved_src_claude_dir="" resolved_env_claude_dir=""
+    resolved_src_claude_dir=$(_env_resolve_dir "$src_claude_dir")
+    resolved_env_claude_dir=$(_env_resolve_dir "$env_dir/.claude")
+    [[ "$resolved_src_claude_dir" != "$resolved_env_claude_dir" ]] \
+        || _die "sync source resolves to target environment '$name'"
 
     local sync_mode
     sync_mode=$(_read "$env_dir/clone_mode" "copied")
@@ -384,13 +472,7 @@ _env_cmd_sync() {
     done
 
     if [[ -f "$src_claude_dir/CLAUDE.md" || -L "$src_claude_dir/CLAUDE.md" ]]; then
-        rm -f "$env_dir/.claude/CLAUDE.md"
-        if [[ "$sync_mode" == "linked" ]]; then
-            ln -sf "$src_claude_dir/CLAUDE.md" "$env_dir/.claude/CLAUDE.md"
-        else
-            cp -L "$src_claude_dir/CLAUDE.md" "$env_dir/.claude/CLAUDE.md"
-            _write_env_claude_md "$env_dir/.claude" "$name" --append
-        fi
+        _env_sync_claude_md "$src_claude_dir/CLAUDE.md" "$env_dir/.claude" "$name" "$sync_mode"
         synced=$((synced + 1))
     else
         skipped=$((skipped + 1))
@@ -446,7 +528,7 @@ _env_cmd_set() {
     # Parse: cac env set [name] <key> <value|--remove>
     # If first arg is a known key, use current env; otherwise treat as env name
     local name="" key="" value="" remove=false
-    local known_keys="proxy version telemetry persona tz lang autoupdate auto-update"
+    local known_keys="proxy version telemetry persona tz lang autoupdate auto-update provider-routing provider_routing signal-guard signal_guard"
 
     if [[ $# -lt 1 ]] || [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "help" ]]; then
         echo
@@ -460,6 +542,9 @@ _env_cmd_set() {
         echo "    $(_green "set") [name] persona <macos-vscode|macos-cursor|macos-iterm|linux-desktop|--remove>"
         echo "                                                          Terminal preset: inject desktop env vars, hide Docker signals (for containers)"
         echo "    $(_green "set") [name] autoupdate <on|off>             Auto-check Claude Code latest on activation"
+        echo "    $(_green "set") [name] provider-routing <managed|warn|preserve>"
+        echo "                                                          Manage Claude provider routing env exposure"
+        echo "    $(_green "set") [name] signal-guard <warn|strict>       Warn or block risky local signal combinations"
         echo "    $(_green "set") [name] tz <IANA timezone>               Set timezone (e.g. Asia/Shanghai)"
         echo "    $(_green "set") [name] lang <locale>                    Set locale (e.g. zh_CN.UTF-8)"
         echo
@@ -479,7 +564,7 @@ _env_cmd_set() {
     _require_env "$name"
     local env_dir="$ENVS_DIR/$name"
 
-    [[ $# -ge 1 ]] || _die "usage: cac env set [name] <proxy|version|telemetry|persona|autoupdate|tz|lang> <value|--remove>"
+    [[ $# -ge 1 ]] || _die "usage: cac env set [name] <proxy|version|telemetry|persona|autoupdate|provider-routing|signal-guard|tz|lang> <value|--remove>"
     key="$1"; shift
 
     # Parse value or --remove
@@ -564,6 +649,28 @@ _env_cmd_set() {
                 esac
             fi
             ;;
+        provider-routing|provider_routing)
+            if [[ "$remove" == "true" ]]; then
+                rm -f "$env_dir/provider_routing"
+                echo "$(_green_bold "Removed") provider-routing override from $(_bold "$name")"
+            else
+                [[ -n "$value" ]] || _die "usage: cac env set [name] provider-routing <managed|warn|preserve>"
+                [[ "$value" =~ ^(managed|warn|preserve)$ ]] || _die "invalid provider-routing '$value' (use managed, warn, or preserve)"
+                echo "$value" > "$env_dir/provider_routing"
+                echo "$(_green_bold "Set") provider-routing for $(_bold "$name") -> $(_cyan "$value")"
+            fi
+            ;;
+        signal-guard|signal_guard)
+            if [[ "$remove" == "true" ]]; then
+                rm -f "$env_dir/signal_guard"
+                echo "$(_green_bold "Removed") signal-guard override from $(_bold "$name")"
+            else
+                [[ -n "$value" ]] || _die "usage: cac env set [name] signal-guard <warn|strict>"
+                [[ "$value" =~ ^(warn|strict)$ ]] || _die "invalid signal-guard '$value' (use warn or strict)"
+                echo "$value" > "$env_dir/signal_guard"
+                echo "$(_green_bold "Set") signal-guard for $(_bold "$name") -> $(_cyan "$value")"
+            fi
+            ;;
         tz)
             [[ "$remove" != "true" ]] || _die "cannot remove timezone"
             [[ -n "$value" ]] || _die "usage: cac env set [name] tz <IANA timezone>"
@@ -579,7 +686,7 @@ _env_cmd_set() {
             echo "$(_green_bold "Set") locale for $(_bold "$name") → $(_cyan "$value")"
             ;;
         *)
-            _die "unknown key '$key' — use proxy, version, telemetry, persona, autoupdate, tz, or lang"
+            _die "unknown key '$key' — use proxy, version, telemetry, persona, autoupdate, provider-routing, signal-guard, tz, or lang"
             ;;
     esac
 }
@@ -611,7 +718,7 @@ cmd_env() {
             echo "                             [--telemetry mode] [--persona preset] [--autoupdate]"
             echo "                             Create isolated environment (auto-activates)"
             echo "    $(_green "set") [name] <key> <value>        Modify environment"
-            echo "                             proxy, version, telemetry, persona, autoupdate, tz, or lang"
+            echo "                             proxy, version, telemetry, persona, autoupdate, provider-routing, signal-guard, tz, or lang"
             echo "    $(_green "sync") [name] [source]            Copy commands, agents, hooks, skills, plugins, CLAUDE.md"
             echo "                             source defaults to host; settings.json is not copied"
             echo "    $(_green "detach") <name>   Stop cloned settings from syncing with the source"

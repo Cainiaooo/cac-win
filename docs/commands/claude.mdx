@@ -60,6 +60,16 @@ cac claude update work   # update a specific environment
 
 If the latest version is not installed yet, cac downloads it first and then pins the environment to that version. This uses Anthropic's remote latest marker, not the local `.latest` file.
 
+## audit
+
+Show a conservative local risk status for a Claude Code version.
+
+```bash
+cac claude audit current
+cac claude audit 2.1.196
+```
+
+`current` reads the active cac environment's pinned version. Versions covered by public provider-routing marker reports, currently `2.1.91` through `2.1.196`, are reported as `needs review`. Other versions are reported as `unknown`, not known safe. After any version change, run `cac env check -d` to review the effective local provider-routing and runtime signals.
 ## prune
 
 List installed Claude Code versions that are not referenced by any environment.

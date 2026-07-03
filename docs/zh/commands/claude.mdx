@@ -60,6 +60,16 @@ cac claude update work   # 更新指定环境
 
 如果最新版本尚未安装，cac 会先下载，再把该环境锁定到这个版本。这里使用 Anthropic 远端 latest 标记，而不是本地 `.latest` 文件。
 
+## audit
+
+保守审计当前或指定 Claude Code 版本的 provider-routing 风险状态。
+
+```bash
+cac claude audit current
+cac claude audit 2.1.196
+```
+
+`current` 会读取当前激活的 cac 环境绑定版本。公开 provider-routing marker 报告覆盖过的版本范围，即 `2.1.91` 到 `2.1.196`，会输出 `needs review`。其他版本输出 `unknown`，不表示已知安全。版本变化后请继续运行 `cac env check -d` 核对实际可见的本地 provider-routing 和 runtime 信号。
 ## prune
 
 列出没有被任何环境引用的已安装 Claude Code 版本。

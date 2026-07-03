@@ -95,9 +95,10 @@ if is_windows; then
     elif ! "$bash_exe" --version >/dev/null 2>&1; then
         skip "当前宿主无法正常启动 Git Bash，跳过运行时入口测试"
     else
-        out=$(cmd.exe /v:on /c "\"$PROJECT_DIR\\cac.cmd\" --version >nul 2>&1 & echo EXITCODE:!ERRORLEVEL!" 2>&1 | tr -d '\r')
+        project_win=$(cygpath -w "$PROJECT_DIR")
+        out=$(cd "$PROJECT_DIR" && cmd.exe //v:on //c "cac.cmd --version >nul 2>&1 & echo EXITCODE:!ERRORLEVEL!" 2>&1 | tr -d '\r')
         [[ "$out" == *"EXITCODE:0"* ]] && pass "cac.cmd 返回码正确" || fail "cac.cmd 返回码异常: $out"
-        if powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PROJECT_DIR\\cac.ps1" --version >/dev/null 2>&1; then
+        if powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$project_win\\cac.ps1" --version >/dev/null 2>&1; then
             pass "cac.ps1 返回码正确"
         else
             fail "cac.ps1 返回码异常"

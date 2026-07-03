@@ -307,6 +307,10 @@ cac claude ls
 cac claude update                        # 更新当前环境
 cac claude update work                   # 更新指定环境
 
+# 审计当前或指定 Claude Code 版本的 provider-routing 风险状态
+cac claude audit current
+cac claude audit 2.1.196
+
 # 清理未被任何环境使用的版本
 cac claude prune
 cac claude prune --yes                   # 直接删除
@@ -353,6 +357,42 @@ cac env create main --telemetry paranoid
 # transparent：不阻断，所有遥测正常上报
 cac env create main --telemetry transparent
 ```
+
+### Provider routing and signal guard
+
+cac can manage local Claude Code launch signals: shell environment variables, the per-env `.claude` settings directory, timezone/locale runtime hooks, and whether the wrapper warns or blocks before starting Claude. It cannot control Anthropic account status, payment signals, OAuth state, IP reputation, or any provider-side routing decision.
+
+Provider routing policy controls whether Claude can see custom provider endpoint/auth variables such as `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, Bedrock/Vertex routing variables, and trace propagation flags:
+
+```powershell
+cac env set main provider-routing managed
+cac env set main provider-routing warn
+cac env set main provider-routing preserve
+```
+
+Defaults are conservative: proxy environments use `managed`; non-proxy environments use `warn` so API-key workflows keep working but remain visible in `cac env check`.
+
+Signal guard controls launch-time handling:
+
+```powershell
+cac env set main signal-guard warn
+cac env set main signal-guard strict
+```
+
+`warn` prints redacted key names and continues. `strict` blocks startup when local provider routing signals are visible in a risky combination, such as custom provider routing plus `Asia/Shanghai` or `Asia/Urumqi`, or provider routing keys inside Claude settings. Error output never includes secret values.
+
+`cac env check -d` includes a `Signal guard` block with provider-routing policy, settings scan results, Node runtime timezone/locale probe, and a Bun probe when `bun` is available.
+
+When cloning Claude settings, cac sanitizes provider routing keys by default:
+
+```powershell
+cac env create work --clone --sanitize-provider-routing
+cac env create work --clone --preserve-provider-routing
+```
+
+The sanitize mode removes only known provider-routing key names from cloned `settings.json`; commands, agents, hooks, skills, plugins, and normal settings remain unchanged. Output shows key names only.
+
+Upgrade/uninstall impact: existing environments do not need to be recreated and users do not need to re-run setup after pulling this update. The new `provider_routing`, `signal_guard`, and `clone_provider_routing` files live under `~/.cac/envs/<name>/`, so `cac self delete` removes them with the rest of the cac runtime data and no extra uninstall steps are required.
 
 ### Relay 模式（TUN 代理穿透）
 
@@ -411,6 +451,7 @@ cac env set main lang zh_CN.UTF-8
 | `cac claude install [latest\|<version>]` | 安装 Claude Code 版本 |
 | `cac claude ls` | 查看已安装 Claude Code 版本 |
 | `cac claude update [env]` | 将环境更新到远端最新 Claude Code |
+| `cac claude audit [current\|<version>]` | 保守审计 Claude Code provider-routing 风险状态 |
 | `cac claude prune [--yes]` | 列出或删除未被环境引用的 Claude Code 版本 |
 | `cac claude uninstall <version>` | 卸载指定版本 |
 | `cac self delete` | 删除 cac 运行目录、wrapper 和环境数据 |
@@ -666,6 +707,8 @@ cac claude install latest
 cac claude install 2.1.81
 cac claude ls
 cac claude update work          # Update env to latest
+cac claude audit current        # Conservative provider-routing risk audit
+cac claude audit 2.1.196
 cac claude prune --yes          # Remove unused versions
 cac claude uninstall 2.1.81
 ```
@@ -689,6 +732,40 @@ cac env create main --telemetry paranoid
 # transparent: no blocking
 cac env create main --telemetry transparent
 ```
+
+### Provider routing and signal guard
+
+cac manages local Claude Code launch signals only: inherited environment variables, the per-env `.claude` settings directory, timezone/locale runtime hooks, and launch-time warnings or blocks. It cannot control account status, payment signals, OAuth state, IP reputation, or provider-side routing decisions.
+
+Provider routing policy:
+
+```powershell
+cac env set main provider-routing managed   # hide provider routing env vars before launch
+cac env set main provider-routing warn      # keep them, but report visible keys
+cac env set main provider-routing preserve  # explicit opt-out from local management
+```
+
+Proxy environments default to `managed`. Non-proxy environments default to `warn` so API-key workflows keep working while `cac env check` still reports visible routing keys.
+
+Signal guard:
+
+```powershell
+cac env set main signal-guard warn
+cac env set main signal-guard strict
+```
+
+`warn` reports redacted key names and continues. `strict` blocks startup when provider routing signals are visible in high-risk local combinations or inside Claude settings. `cac env check -d` shows a `Signal guard` section with settings scan results and Node/Bun timezone probes.
+
+Clone behavior:
+
+```powershell
+cac env create work --clone --sanitize-provider-routing
+cac env create work --clone --preserve-provider-routing
+```
+
+Clone sanitization is the default. It removes known provider-routing key names from cloned `settings.json` without printing values.
+
+Upgrade/uninstall impact: existing environments remain compatible and do not need to be recreated or migrated. The new per-env control files stay inside `~/.cac/envs/<name>/`, so `cac self delete` covers uninstall cleanup without extra steps.
 
 ### Relay mode (TUN proxy bypass)
 
