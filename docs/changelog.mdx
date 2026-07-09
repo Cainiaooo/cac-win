@@ -5,6 +5,19 @@ description: Release history and notable changes
 
 All notable changes to this project are documented here. Each entry links to the corresponding PR or issue.
 
+## v1.5.8-win.7
+<sub>2026-07-09</sub>
+
+**Fix: auto-repair plugin marketplace `installLocation` after env clone**
+
+`~/.claude/plugins/known_marketplaces.json` records each marketplace's install directory as an **absolute path**. When an environment is created with `--clone` (or migrated from an older layout), that file is copied verbatim, so the recorded `installLocation` still points at the source config dir (e.g. the host `~/.claude`). Claude Code validates that the path lies inside the active `CLAUDE_CONFIG_DIR`'s `plugins/marketplaces`, and otherwise rejects the marketplace with `corrupted installLocation` — surfaced when running `/plugin`.
+
+- `_ensure_initialized` (runs on every `cac` command) now rewrites each env's stale `installLocation` to that env's own `plugins/marketplaces` directory. The fix self-heals on the next `cac` invocation — no `npm install` or environment re-creation required.
+- The rewrite only fires when the marketplace files actually live inside the env dir, so it never creates a dangling pointer.
+- Link-mode clones (on macOS/Linux, `--clone` symlinks `.claude/plugins` to the shared source) are skipped, so the host or other linked envs are never rewritten through the symlink. Windows is always copy mode and unaffected.
+
+Bumps `CAC_VERSION` to `1.5.8-win.7`.
+
 ## v1.5.8-win.5
 <sub>2026-04-28</sub>
 

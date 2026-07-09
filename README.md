@@ -167,6 +167,8 @@ cac env create work2 --clone work
 - 你有统一的 skills/hooks 想在所有环境间共享
 - 你在 macOS/Linux 上
 
+> **插件 marketplace 路径自动修复**：`--clone` 复制的 `known_marketplaces.json` 里记录的是 marketplace 安装目录的**绝对路径**，仍指向源配置，Claude Code 会因此在 `/plugin` 时报 `corrupted installLocation`。cac 会随任意 `cac` 命令自动把陈旧路径改写到当前环境的 marketplaces 目录（link 模式的 clone 会跳过、不透过符号链接改写共享配置）。细节见 [changelog](docs/changelog.mdx)。若你在旧版本上已经遇到此告警，`git pull` 更新后随便跑一条 `cac` 命令（如 `cac ls`）即可修复，**无需 `npm install`、也无需重建环境**。
+
 ### 场景 D：希望环境始终使用最新 Claude Code
 
 ```powershell

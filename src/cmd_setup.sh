@@ -55,6 +55,39 @@ fs.writeFileSync(fpath,JSON.stringify(d,null,2)+'\n');
 " "$_sf" 2>/dev/null || true
     done
 
+    # Repair plugin marketplace installLocation paths in every env. A env created
+    # with --clone in copy mode copies known_marketplaces.json verbatim, so its
+    # absolute installLocation paths still point at the source config dir (e.g.
+    # ~/.claude); Claude Code then rejects them as "corrupted installLocation"
+    # (seen when running /plugin). Rewrite each entry to this env's own
+    # marketplaces dir, but only when the marketplace files already live there —
+    # never point at nothing.
+    local _mf _mkt_plugins_dir _mkt_claude_dir
+    for _mf in "$ENVS_DIR"/*/.claude/plugins/known_marketplaces.json; do
+        [[ -f "$_mf" ]] || continue
+        # Skip link-mode clones (macOS/Linux): --clone symlinks .claude/plugins to
+        # the shared source config, so rewriting through the symlink would corrupt
+        # the host or other linked envs. Windows is always copy mode (no symlink).
+        _mkt_plugins_dir="$(dirname "$_mf")"
+        _mkt_claude_dir="$(dirname "$_mkt_plugins_dir")"
+        { [[ -L "$_mkt_plugins_dir" ]] || [[ -L "$_mkt_claude_dir" ]]; } && continue
+        node -e "
+const fs=require('fs'),path=require('path');
+const f=process.argv[1];
+const dir=path.join(path.dirname(f),'marketplaces');
+let d;try{d=JSON.parse(fs.readFileSync(f,'utf8'))}catch(e){process.exit(0)}
+let changed=false;
+const ks=Object.keys(d);
+for(let i=0;i<ks.length;i++){
+  const e=d[ks[i]];
+  if(!e||typeof e.installLocation!=='string')continue;
+  const want=path.join(dir,path.basename(e.installLocation));
+  if(path.normalize(e.installLocation)!==want&&fs.existsSync(want)){e.installLocation=want;changed=true}
+}
+if(changed)fs.writeFileSync(f,JSON.stringify(d,null,2)+'\n');
+" "$_mf" 2>/dev/null || true
+    done
+
     # PATH (idempotent — always ensure it's in rc file)
     local rc_file; rc_file=$(_detect_rc_file)
     _write_path_to_rc "$rc_file" >/dev/null 2>&1 || true
